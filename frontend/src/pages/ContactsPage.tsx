@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { contactsAPI, Contact } from '../api/client';
 import { getContacts, BackendContact } from '../api/backendApi';
-import { Users, Search, Upload, Plus, Trash2, Phone, MessageSquare } from 'lucide-react';
+import { Users, Search, Upload, Plus, MessageSquare } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 
@@ -10,10 +10,8 @@ export const ContactsPage: React.FC = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [selectedContacts, setSelectedContacts] = useState<number[]>([]);
   const [selectedSheetContacts, setSelectedSheetContacts] = useState<number[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [backendContacts, setBackendContacts] = useState<BackendContact[]>([]);
   const [backendLoading, setBackendLoading] = useState(true);
   const [backendError, setBackendError] = useState<string | null>(null);
@@ -45,7 +43,7 @@ export const ContactsPage: React.FC = () => {
     loadBackendContacts();
   }, []);
 
-  const { data: contacts } = useQuery({
+  useQuery({
     queryKey: ['contacts', search],
     queryFn: () => contactsAPI.getAll({ search, limit: 1000 }).then(res => res.data)
   });
@@ -57,31 +55,6 @@ export const ContactsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
     },
     onError: () => toast.error('Failed to import contacts')
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: number) => contactsAPI.delete(id),
-    onSuccess: () => {
-      toast.success('Contact removed');
-      queryClient.invalidateQueries({ queryKey: ['contacts'] });
-    }
-  });
-
-  const deleteMultipleMutation = useMutation({
-    mutationFn: async (ids: number[]) => {
-      // Delete all contacts in parallel
-      await Promise.all(ids.map(id => contactsAPI.delete(id)));
-    },
-    onSuccess: (_, ids) => {
-      toast.success(`${ids.length} contact(s) removed`);
-      setSelectedContacts([]);
-      setShowDeleteConfirm(false);
-      queryClient.invalidateQueries({ queryKey: ['contacts'] });
-    },
-    onError: () => {
-      toast.error('Failed to delete contacts');
-      setShowDeleteConfirm(false);
-    }
   });
 
   const createMutation = useMutation({
@@ -106,57 +79,6 @@ export const ContactsPage: React.FC = () => {
     const file = e.target.files?.[0];
     if (file) {
       importMutation.mutate(file);
-    }
-  };
-
-  const toggleSelectContact = (id: number) => {
-    setSelectedContacts(prev =>
-      prev.includes(id) ? prev.filter(cId => cId !== id) : [...prev, id]
-    );
-  };
-
-  const selectAll = () => {
-    if (contacts) {
-      setSelectedContacts(contacts.map(c => c.id));
-    }
-  };
-
-  const clearSelection = () => setSelectedContacts([]);
-
-  const handleSendMessage = () => {
-    if (selectedContacts.length === 0) {
-      toast.error('Please select at least one contact');
-      return;
-    }
-    // Store selected contacts in sessionStorage and navigate
-    sessionStorage.setItem('selectedContactIds', JSON.stringify(selectedContacts));
-    navigate('/messaging');
-  };
-
-  const handleMakeCall = () => {
-    if (selectedContacts.length === 0) {
-      toast.error('Please select at least one contact');
-      return;
-    }
-    toast('Call feature coming soon!', { icon: 'ℹ️' });
-  };
-
-  const handleDeleteSelected = () => {
-    if (selectedContacts.length === 0) {
-      toast.error('Please select at least one contact');
-      return;
-    }
-    setShowDeleteConfirm(true);
-  };
-
-  const confirmDelete = () => {
-    deleteMultipleMutation.mutate(selectedContacts);
-  };
-
-  const handleDeleteSingle = (id: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (window.confirm('Are you sure you want to delete this contact?')) {
-      deleteMutation.mutate(id);
     }
   };
 
@@ -440,61 +362,7 @@ export const ContactsPage: React.FC = () => {
         )}
       </div>
 
-      {/* Selection Actions */}
-      {selectedContacts.length > 0 && (
-        <div className="bg-primary-50 border border-primary-200 rounded-lg p-4 flex items-center justify-between">
-          <span className="text-primary-900 font-medium">
-            {selectedContacts.length} contact(s) selected
-          </span>
-          <div className="flex gap-2">
-            <button className="btn btn-primary flex items-center gap-2" onClick={handleSendMessage}>
-              <MessageSquare className="w-4 h-4" />
-              Send Message
-            </button>
-            <button className="btn btn-primary flex items-center gap-2" onClick={handleMakeCall}>
-              <Phone className="w-4 h-4" />
-              Make Call
-            </button>
-            <button className="btn bg-red-600 text-white hover:bg-red-700 flex items-center gap-2" onClick={handleDeleteSelected}>
-              <Trash2 className="w-4 h-4" />
-              Delete Selected
-            </button>
-            <button className="btn btn-secondary" onClick={clearSelection}>
-              Clear
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Local Database Contacts Table - Hidden since using Google Sheets */}
-
-      {/* Delete Confirmation Modal */}
-      {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-xl font-bold text-gray-900 mb-4">Confirm Delete</h3>
-            <p className="text-gray-600 mb-6">
-              Are you sure you want to delete {selectedContacts.length} contact(s)? This action cannot be undone.
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                className="btn btn-secondary"
-                onClick={() => setShowDeleteConfirm(false)}
-                disabled={deleteMultipleMutation.isPending}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn bg-red-600 text-white hover:bg-red-700"
-                onClick={confirmDelete}
-                disabled={deleteMultipleMutation.isPending}
-              >
-                {deleteMultipleMutation.isPending ? 'Deleting...' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Add Contact Modal */}
       {showAddModal && (
