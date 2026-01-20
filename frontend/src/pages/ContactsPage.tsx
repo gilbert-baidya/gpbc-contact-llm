@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { contactsAPI, Contact } from '../api/client';
 import { getContacts, BackendContact } from '../api/backendApi';
-import { Users, Search, Upload, Plus, Edit2, Trash2, Phone, MessageSquare } from 'lucide-react';
+import { Users, Search, Upload, Plus, Trash2, Phone, MessageSquare } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 
@@ -45,7 +45,7 @@ export const ContactsPage: React.FC = () => {
     loadBackendContacts();
   }, []);
 
-  const { data: contacts, isLoading } = useQuery({
+  const { data: contacts } = useQuery({
     queryKey: ['contacts', search],
     queryFn: () => contactsAPI.getAll({ search, limit: 1000 }).then(res => res.data)
   });
@@ -467,76 +467,6 @@ export const ContactsPage: React.FC = () => {
       )}
 
       {/* Local Database Contacts Table - Hidden since using Google Sheets */}
-      {false && contacts && contacts.length > 0 && (
-      <div className="card">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-gray-200">
-                <th className="px-4 py-3 text-left">
-                  <input
-                    type="checkbox"
-                    className="rounded"
-                    checked={selectedContacts.length === (contacts?.length || 0)}
-                    onChange={(e) => e.target.checked ? selectAll() : clearSelection()}
-                  />
-                </th>
-                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Name</th>
-                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Phone</th>
-                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">City</th>
-                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Language</th>
-                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
-                    Loading contacts...
-                  </td>
-                </tr>
-              ) : contacts?.length ? (
-                contacts?.map((contact) => (
-                  <tr key={contact.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="px-4 py-3">
-                      <input
-                        type="checkbox"
-                        className="rounded"
-                        checked={selectedContacts.includes(contact.id)}
-                        onChange={() => toggleSelectContact(contact.id)}
-                      />
-                    </td>
-                    <td className="px-4 py-3 text-sm font-medium text-gray-900">{contact.name}</td>
-                    <td className="px-4 py-3 text-sm text-gray-600">{contact.phone}</td>
-                    <td className="px-4 py-3 text-sm text-gray-600">{contact.city || '-'}</td>
-                    <td className="px-4 py-3 text-sm text-gray-600 capitalize">{contact.preferred_language}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-2">
-                        <button className="p-1 hover:bg-gray-200 rounded">
-                          <Edit2 className="w-4 h-4 text-gray-600" />
-                        </button>
-                        <button
-                          className="p-1 hover:bg-red-100 rounded"
-                          onClick={(e) => handleDeleteSingle(contact.id, e)}
-                        >
-                          <Trash2 className="w-4 h-4 text-red-600" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
-                    No contacts found. Import a CSV file to get started.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      )}
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (

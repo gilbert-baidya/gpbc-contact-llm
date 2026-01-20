@@ -1,18 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { messagesAPI, contactsAPI, Contact } from '../api/client';
-import { MessageSquare, Send, Users, Clock, X, Search, Filter, UserPlus, Sparkles, Save, Calendar, ChevronDown, ChevronUp, Shield } from 'lucide-react';
+import { messagesAPI, contactsAPI } from '../api/client';
+import { MessageSquare, Send, Users, Clock, X, Search, UserPlus, Sparkles, Save, ChevronDown, ChevronUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getContacts, BackendContact } from '../api/backendApi';
-import { useAuth } from '../context/AuthContext';
 
 export const MessagingPage: React.FC = () => {
   const queryClient = useQueryClient();
-  const { user, canSendMessages } = useAuth();
   const [messageContent, setMessageContent] = useState('');
   const [messageType, setMessageType] = useState<'sms' | 'voice'>('sms');
   const [sendToAll, setSendToAll] = useState(false);
-  const [selectedContacts, setSelectedContacts] = useState<number[]>([]);
   const [sheetContacts, setSheetContacts] = useState<BackendContact[]>([]);
   const [showContactModal, setShowContactModal] = useState(false);
   const [contactSearch, setContactSearch] = useState('');
@@ -36,20 +33,11 @@ export const MessagingPage: React.FC = () => {
 
   // Check if contacts were pre-selected from ContactsPage
   useEffect(() => {
-    const preSelectedIds = sessionStorage.getItem('selectedContactIds');
     const preSelectedSheet = sessionStorage.getItem('selectedSheetContacts');
-    
-    if (preSelectedIds) {
-      const ids = JSON.parse(preSelectedIds);
-      setSelectedContacts(ids);
-      setSendToAll(false);
-      sessionStorage.removeItem('selectedContactIds');
-      toast.success(`${ids.length} contact(s) selected`);
-    }
     
     if (preSelectedSheet) {
       const sheetData = JSON.parse(preSelectedSheet);
-      setSheetContacts(sheetData.map(c => ({
+      setSheetContacts(sheetData.map((c: any) => ({
         id: c.id,
         name: c.name,
         phone: c.phone,
@@ -64,7 +52,7 @@ export const MessagingPage: React.FC = () => {
   }, []);
 
 
-  const { data: contacts } = useQuery({
+  useQuery({
     queryKey: ['contacts'],
     queryFn: () => contactsAPI.getAll({ active_only: true }).then(res => res.data)
   });
