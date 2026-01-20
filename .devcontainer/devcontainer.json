@@ -1,0 +1,19 @@
+{
+  "name": "GPBC Contact Proxy",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:18",
+  "forwardPorts": [3001],
+  "portsAttributes": {
+    "3001": {
+      "label": "Proxy Server",
+      "onAutoForward": "notify",
+      "protocol": "https"
+    }
+  },
+  "postCreateCommand": "npm install",
+  "postStartCommand": "node server.js",
+  "customizations": {
+    "codespaces": {
+      "openFiles": ["README.md"]
+    }
+  }
+}
