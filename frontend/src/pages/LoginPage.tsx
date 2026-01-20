@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Lock, Mail, Eye, EyeOff, AlertCircle, Church } from 'lucide-react';
+import { Lock, Mail, Eye, EyeOff, Church } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export const LoginPage: React.FC = () => {
@@ -9,7 +9,6 @@ export const LoginPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [showDemoCredentials, setShowDemoCredentials] = useState(true);
 
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -41,11 +40,6 @@ export const LoginPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const quickLogin = (demoEmail: string, demoPassword: string) => {
-    setEmail(demoEmail);
-    setPassword(demoPassword);
   };
 
   return (
@@ -126,73 +120,6 @@ export const LoginPage: React.FC = () => {
               )}
             </button>
           </form>
-        </div>
-
-        {/* Demo Credentials */}
-        {showDemoCredentials && (
-          <div className="mt-6 card bg-blue-50 border-2 border-blue-200">
-            <div className="flex items-start justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <AlertCircle className="w-5 h-5 text-blue-600" />
-                <h3 className="font-semibold text-blue-900">Demo Credentials</h3>
-              </div>
-              <button
-                onClick={() => setShowDemoCredentials(false)}
-                className="text-blue-600 hover:text-blue-800"
-              >
-                ×
-              </button>
-            </div>
-            
-            <div className="space-y-2 text-sm">
-              <button
-                type="button"
-                onClick={() => quickLogin('pastor@gpbc.org', 'pastor123')}
-                className="w-full text-left p-3 bg-white rounded-lg border border-blue-200 hover:border-blue-400 hover:bg-blue-50 transition-all"
-              >
-                <div className="font-semibold text-gray-900">👨‍✝️ Pastor Account</div>
-                <div className="text-gray-600 text-xs mt-1">
-                  pastor@gpbc.org / pastor123
-                </div>
-                <div className="text-blue-600 text-xs mt-1 font-medium">
-                  ✓ Can send messages
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => quickLogin('admin@gpbc.org', 'admin123')}
-                className="w-full text-left p-3 bg-white rounded-lg border border-blue-200 hover:border-blue-400 hover:bg-blue-50 transition-all"
-              >
-                <div className="font-semibold text-gray-900">👤 Admin Account</div>
-                <div className="text-gray-600 text-xs mt-1">
-                  admin@gpbc.org / admin123
-                </div>
-                <div className="text-blue-600 text-xs mt-1 font-medium">
-                  ✓ Can send messages
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => quickLogin('member@gpbc.org', 'member123')}
-                className="w-full text-left p-3 bg-white rounded-lg border border-blue-200 hover:border-blue-400 hover:bg-blue-50 transition-all"
-              >
-                <div className="font-semibold text-gray-900">👥 Regular Member</div>
-                <div className="text-gray-600 text-xs mt-1">
-                  member@gpbc.org / member123
-                </div>
-                <div className="text-red-600 text-xs mt-1 font-medium">
-                  ✗ Cannot send messages (View only)
-                </div>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Info Footer */}
-        <div className="mt-6 text-center text-sm text-gray-500">
-          <p>Only Pastor and Admin accounts can send messages</p>
         </div>
       </div>
     </div>
