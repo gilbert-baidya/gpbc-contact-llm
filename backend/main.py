@@ -24,6 +24,17 @@ from tasks import send_sms_task, make_call_task
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Import authentication
+try:
+    from auth_routes import router as auth_router
+    from auth_models import Base as AuthBase
+    AUTH_AVAILABLE = True
+    # Create auth tables
+    AuthBase.metadata.create_all(bind=engine)
+except ImportError as e:
+    AUTH_AVAILABLE = False
+    logger.warning(f"Authentication module not available: {e}")
+
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
@@ -42,6 +53,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include authentication routes if available
+if AUTH_AVAILABLE:
+    app.include_router(auth_router)
+    logger.info("✅ Authentication system enabled")
 
 
 # ==================== Health Check ====================
@@ -75,7 +91,7 @@ def create_contact(contact: ContactCreate, db: Session = Depends(get_db)):
 @app.get("/api/contacts", response_model=List[ContactResponse])
 def list_contacts(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 1000,
     active_only: bool = True,
     search: Optional[str] = None,
     db: Session = Depends(get_db)
@@ -155,29 +171,86 @@ async def import_contacts(file: UploadFile = File(...), db: Session = Depends(ge
         imported_count = 0
         errors = []
         
+        # Detect CSV format based on column names
+        has_phone_e164 = 'Phone_E164' in df.columns
+        has_tel_nos = 'Tel.Nos.' in df.columns
+        
+        logger.info(f"CSV columns: {df.columns.tolist()}")
+        logger.info(f"Detected format - Phone_E164: {has_phone_e164}, Tel.Nos: {has_tel_nos}")
+        logger.info(f"Total rows in CSV: {len(df)}")
+        
         for index, row in df.iterrows():
             try:
-                # Skip empty rows
-                if pd.isna(row.get('Name')) or pd.isna(row.get('Tel.Nos.')):
-                    continue
-                
-                contact = Contact(
-                    sl_no=str(row.get('Sl.Nos.', '')),
-                    name=row['Name'].strip(),
-                    address=row.get('Address', '').strip() if not pd.isna(row.get('Address')) else None,
-                    city=row.get('City', '').strip() if not pd.isna(row.get('City')) else None,
-                    state_zip=row.get('StateZip', '').strip() if not pd.isna(row.get('StateZip')) else None,
-                    phone=clean_phone(row['Tel.Nos.']),
-                    preferred_language='bengali'
-                )
+                # Determine which columns to use based on CSV format
+                if has_phone_e164:
+                    # New format: ID, Name, Phone_E164, City, Language, etc.
+                    name_col = 'Name'
+                    phone_col = 'Phone_E164'
+                    city_col = 'City'
+                    language_col = 'Language'
+                    id_col = 'ID'
+                    
+                    name_val = row.get(name_col)
+                    phone_val = row.get(phone_col)
+                    
+                    # Skip empty rows - check for both NaN and empty strings
+                    if pd.isna(name_val) or pd.isna(phone_val) or str(phone_val).strip() == '':
+                        logger.info(f"Skipping row {index + 1}: name={name_val}, phone={phone_val}")
+                        continue
+                    
+                    # Map language codes
+                    lang = str(row.get(language_col, 'EN')).lower()
+                    if lang == 'en':
+                        preferred_language = 'english'
+                    elif lang == 'bn':
+                        preferred_language = 'bengali'
+                    else:
+                        preferred_language = 'english'
+                    
+                    contact = Contact(
+                        sl_no=str(row.get(id_col, '')),
+                        name=str(name_val).strip(),
+                        address=None,
+                        city=row.get(city_col, '').strip() if not pd.isna(row.get(city_col)) else None,
+                        state_zip=None,
+                        phone=str(phone_val).strip(),
+                        preferred_language=preferred_language,
+                        active=True
+                    )
+                    
+                elif has_tel_nos:
+                    # Old format: Sl.Nos., Name, Tel.Nos., Address, City, StateZip
+                    name_col = 'Name'
+                    phone_col = 'Tel.Nos.'
+                    
+                    # Skip empty rows
+                    if pd.isna(row.get(name_col)) or pd.isna(row.get(phone_col)):
+                        continue
+                    
+                    contact = Contact(
+                        sl_no=str(row.get('Sl.Nos.', '')),
+                        name=row[name_col].strip(),
+                        address=row.get('Address', '').strip() if not pd.isna(row.get('Address')) else None,
+                        city=row.get('City', '').strip() if not pd.isna(row.get('City')) else None,
+                        state_zip=row.get('StateZip', '').strip() if not pd.isna(row.get('StateZip')) else None,
+                        phone=clean_phone(row[phone_col]),
+                        preferred_language='bengali',
+                        active=True
+                    )
+                else:
+                    raise ValueError("Unsupported CSV format. Please ensure CSV has either 'Phone_E164' or 'Tel.Nos.' column")
                 
                 db.add(contact)
                 imported_count += 1
                 
             except Exception as e:
-                errors.append(f"Row {index + 1}: {str(e)}")
+                error_msg = f"Row {index + 1}: {str(e)}"
+                errors.append(error_msg)
+                logger.error(error_msg)
         
         db.commit()
+        
+        logger.info(f"Import complete: {imported_count} contacts imported, {len(errors)} errors")
         
         return {
             "success": True,
@@ -196,6 +269,53 @@ async def import_contacts(file: UploadFile = File(...), db: Session = Depends(ge
 def send_message(message: MessageCreate, db: Session = Depends(get_db)):
     """Send message to contacts"""
     try:
+        sent_results = []
+        
+        # Handle phone_numbers from Google Sheets (via Node.js)
+        if message.phone_numbers:
+            logger.info(f"Sending to {len(message.phone_numbers)} contacts from Google Sheets")
+            for contact_data in message.phone_numbers:
+                phone = contact_data.get('phone')
+                name = contact_data.get('name', 'Unknown')
+                
+                if not phone:
+                    continue
+                
+                # Send SMS directly without storing in DB
+                if message.message_type.value == "sms":
+                    result = twilio_service.send_sms(phone, message.content)
+                    sent_results.append({
+                        "name": name,
+                        "phone": phone,
+                        "success": result.get("success"),
+                        "sid": result.get("sid"),
+                        "error": result.get("error")
+                    })
+                    logger.info(f"SMS to {name} ({phone}): {result}")
+                else:
+                    result = twilio_service.make_call(phone, message.content)
+                    sent_results.append({
+                        "name": name,
+                        "phone": phone,
+                        "success": result.get("success"),
+                        "sid": result.get("sid"),
+                        "error": result.get("error")
+                    })
+                    logger.info(f"Call to {name} ({phone}): {result}")
+            
+            successful = sum(1 for r in sent_results if r.get("success"))
+            failed = len(sent_results) - successful
+            
+            return {
+                "success": True,
+                "message": f"Sent {successful} messages, {failed} failed",
+                "total": len(sent_results),
+                "successful": successful,
+                "failed": failed,
+                "results": sent_results
+            }
+        
+        # Handle contact_ids from local database (legacy)
         contact_ids = []
         
         if message.send_to_all:
@@ -211,6 +331,10 @@ def send_message(message: MessageCreate, db: Session = Depends(get_db)):
         sent_messages = []
         
         for contact_id in contact_ids:
+            contact = db.query(Contact).filter(Contact.id == contact_id).first()
+            if not contact:
+                continue
+                
             msg = Message(
                 contact_id=contact_id,
                 message_type=message.message_type,

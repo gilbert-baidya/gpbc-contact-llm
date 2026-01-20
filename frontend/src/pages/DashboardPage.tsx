@@ -1,9 +1,33 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { statisticsAPI, callsAPI } from '../api/client';
+import { getStats, BackendStats } from '../api/backendApi';
 import { BarChart3, Users, MessageSquare, Phone, Calendar } from 'lucide-react';
 
 export const DashboardPage: React.FC = () => {
+  const [backendStats, setBackendStats] = useState<BackendStats | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Load stats from backend on mount
+  useEffect(() => {
+    const loadStats = async () => {
+      try {
+        setIsLoading(true);
+        setStatsError(null);
+        const data = await getStats();
+        setBackendStats(data);
+      } catch (error: any) {
+        console.error('Failed to load stats:', error);
+        setStatsError(error.message || 'Failed to load statistics');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadStats();
+  }, []);
+
   const { data: stats } = useQuery({
     queryKey: ['statistics'],
     queryFn: () => statisticsAPI.get().then(res => res.data)
@@ -40,6 +64,72 @@ export const DashboardPage: React.FC = () => {
         <BarChart3 className="w-8 h-8 text-primary-600" />
         <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
       </div>
+
+      {/* Error Message */}
+      {statsError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+          Error loading statistics: {statsError}
+        </div>
+      )}
+
+      {/* Google Apps Script Stats from Backend */}
+      {isLoading ? (
+        <div className="text-center py-8 text-gray-500">Loading statistics...</div>
+      ) : backendStats ? (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="card bg-blue-50">
+              <h3 className="text-sm font-semibold text-blue-900 mb-1">Total Contacts</h3>
+              <p className="text-3xl font-bold text-blue-600">{backendStats.totalContacts || 0}</p>
+            </div>
+            <div className="card bg-green-50">
+              <h3 className="text-sm font-semibold text-green-900 mb-1">Opted In (Yes)</h3>
+              <p className="text-3xl font-bold text-green-600">{backendStats.optInYes || 0}</p>
+            </div>
+            <div className="card bg-red-50">
+              <h3 className="text-sm font-semibold text-red-900 mb-1">Opted Out (No)</h3>
+              <p className="text-3xl font-bold text-red-600">{backendStats.optInNo || 0}</p>
+            </div>
+            <div className="card bg-purple-50">
+              <h3 className="text-sm font-semibold text-purple-900 mb-1">English</h3>
+              <p className="text-3xl font-bold text-purple-600">{backendStats.english || 0}</p>
+            </div>
+            <div className="card bg-orange-50">
+              <h3 className="text-sm font-semibold text-orange-900 mb-1">Bangla</h3>
+              <p className="text-3xl font-bold text-orange-600">{backendStats.bangla || 0}</p>
+            </div>
+          </div>
+          
+          {/* Group Statistics */}
+          <div className="card">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Groups</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-lg">
+                <div className="text-4xl">👨</div>
+                <div>
+                  <h3 className="text-sm font-semibold text-blue-900">Men</h3>
+                  <p className="text-2xl font-bold text-blue-600">{backendStats.menCount || 0}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 p-4 bg-pink-50 rounded-lg">
+                <div className="text-4xl">👩</div>
+                <div>
+                  <h3 className="text-sm font-semibold text-pink-900">Women</h3>
+                  <p className="text-2xl font-bold text-pink-600">{backendStats.womenCount || 0}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 p-4 bg-indigo-50 rounded-lg">
+                <div className="text-4xl">🎓</div>
+                <div>
+                  <h3 className="text-sm font-semibold text-indigo-900">Young Adults</h3>
+                  <p className="text-2xl font-bold text-indigo-600">{backendStats.youngAdultCount || 0}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+
+      ) : null}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

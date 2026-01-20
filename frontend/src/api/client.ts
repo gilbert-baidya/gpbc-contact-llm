@@ -1,11 +1,25 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// Node.js backend for Google Sheets data (contacts, stats)
+const NODE_API_URL = import.meta.env.VITE_NODE_API_URL || 'http://localhost:3001';
 
-console.log('API Base URL:', API_BASE_URL);
+// Python backend for Twilio SMS/Voice (messaging, calls)
+const PYTHON_API_URL = import.meta.env.VITE_PYTHON_API_URL || 'http://localhost:8000';
 
+console.log('Node API URL:', NODE_API_URL);
+console.log('Python API URL:', PYTHON_API_URL);
+
+// Default API client for Google Sheets data (Node.js)
 export const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: NODE_API_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Python API client for SMS/Voice features
+export const pythonAPI = axios.create({
+  baseURL: PYTHON_API_URL,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -95,26 +109,27 @@ export const contactsAPI = {
   }
 };
 
-// Messages API
+// Messages API - Uses Python backend for real Twilio integration
 export const messagesAPI = {
   getAll: (params?: { skip?: number; limit?: number; contact_id?: number }) =>
-    api.get<Message[]>('/api/messages', { params }),
+    pythonAPI.get<Message[]>('/api/messages', { params }),
   
   send: (data: {
     content: string;
     message_type: 'sms' | 'voice';
     contact_id?: number;
     contact_ids?: number[];
+    phone_numbers?: { id: number; name: string; phone: string }[];
     send_to_all?: boolean;
     scheduled_at?: string;
   }) =>
-    api.post('/api/messages/send', data)
+    pythonAPI.post('/api/messages/send', data)
 };
 
-// Calls API
+// Calls API - Uses Python backend for real Twilio integration
 export const callsAPI = {
   getAll: (params?: { skip?: number; limit?: number }) =>
-    api.get<CallLog[]>('/api/calls', { params }),
+    pythonAPI.get<CallLog[]>('/api/calls', { params }),
   
   make: (data: {
     contact_id?: number;
@@ -122,19 +137,19 @@ export const callsAPI = {
     phone_number?: string;
     message?: string;
   }) =>
-    api.post('/api/calls/make', data)
+    pythonAPI.post('/api/calls/make', data)
 };
 
-// Reminders API
+// Reminders API - Uses Python backend for Celery scheduling
 export const remindersAPI = {
   getAll: (params?: { skip?: number; limit?: number; active_only?: boolean }) =>
-    api.get<ScheduledReminder[]>('/api/reminders', { params }),
+    pythonAPI.get<ScheduledReminder[]>('/api/reminders', { params }),
   
   create: (data: Omit<ScheduledReminder, 'id' | 'active'>) =>
-    api.post<ScheduledReminder>('/api/reminders', data),
+    pythonAPI.post<ScheduledReminder>('/api/reminders', data),
   
   delete: (id: number) =>
-    api.delete(`/api/reminders/${id}`)
+    pythonAPI.delete(`/api/reminders/${id}`)
 };
 
 // Statistics API

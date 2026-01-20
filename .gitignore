@@ -7,6 +7,7 @@ __pycache__/
 env/
 venv/
 ENV/
+.venv/
 build/
 develop-eggs/
 dist/
@@ -22,6 +23,18 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.manifest
+*.spec
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+.python-version
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
 
 # Node
 node_modules/
@@ -29,13 +42,24 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+lerna-debug.log*
 dist/
+dist-ssr/
 build/
+*.local
+.vite/
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
 
 # Environment
 .env
 .env.local
 .env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
 
 # IDE
 .vscode/
@@ -43,21 +67,54 @@ build/
 *.swp
 *.swo
 *.swn
+*.sublime-workspace
+*.sublime-project
 .DS_Store
+.DS_Store?
+._*
+.history/
+*~
 
 # Database
 *.db
 *.sqlite
 *.sqlite3
+church_contacts.db
+celerybeat-schedule
+celerybeat.pid
 
 # Logs
 logs/
 *.log
+backend.log
+nohup.out
 
 # Testing
 .coverage
 htmlcov/
 .pytest_cache/
+coverage/
+*.cover
 
 # Docker
 docker-compose.override.yml
+
+# Secrets and credentials
+*.pem
+*.key
+*.crt
+credentials.json
+.credentials/
+secrets/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# OS
+Thumbs.db
+Desktop.ini
+.Spotlight-V100
+.Trashes
+ehthumbs.db

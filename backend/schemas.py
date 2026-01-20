@@ -48,6 +48,7 @@ class MessageBase(BaseModel):
 class MessageCreate(MessageBase):
     contact_id: Optional[int] = None
     contact_ids: Optional[List[int]] = None
+    phone_numbers: Optional[List[dict]] = None  # [{id, name, phone}, ...]
     send_to_all: bool = False
     scheduled_at: Optional[datetime] = None
 
