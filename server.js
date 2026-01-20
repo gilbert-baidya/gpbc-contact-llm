@@ -24,7 +24,9 @@ const corsOptions = {
     'http://localhost:3002',
     'http://localhost:3003',
     'https://gpbc-contact.netlify.app',
-    'https://*.netlify.app'
+    'https://*.netlify.app',
+    'https://gpbc-contact-beryl.vercel.app',
+    'https://*.vercel.app'
   ],
   methods: ['GET', 'POST'],
   credentials: true,
