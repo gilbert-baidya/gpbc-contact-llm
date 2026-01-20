@@ -53,13 +53,18 @@ build/
 .eslintcache
 .stylelintcache
 
-# Environment
+# Environment variables (CRITICAL - NEVER COMMIT!)
 .env
 .env.local
 .env.*.local
 .env.development.local
 .env.test.local
 .env.production.local
+backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
+*.env.backup
 
 # IDE
 .vscode/
@@ -75,19 +80,27 @@ build/
 .history/
 *~
 
-# Database
+# Database (CRITICAL - Contains user data!)
 *.db
 *.sqlite
 *.sqlite3
 church_contacts.db
+backend/church_contacts.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Celery
 celerybeat-schedule
 celerybeat.pid
+celerybeat-schedule.*
 
 # Logs
 logs/
 *.log
 backend.log
 nohup.out
+*.log.*
 
 # Testing
 .coverage
@@ -95,22 +108,31 @@ htmlcov/
 .pytest_cache/
 coverage/
 *.cover
+.tox/
 
 # Docker
 docker-compose.override.yml
 
-# Secrets and credentials
+# Secrets and credentials (CRITICAL!)
 *.pem
 *.key
 *.crt
+*.p12
+*.pfx
 credentials.json
 .credentials/
 secrets/
+secret.yaml
+secret.yml
+*-secret.*
+*.secret
 
 # Temporary files
 *.tmp
 *.temp
 *.bak
+*.swp
+*.swo
 
 # OS
 Thumbs.db
@@ -118,3 +140,33 @@ Desktop.ini
 .Spotlight-V100
 .Trashes
 ehthumbs.db
+
+# Backup files
+*.backup
+*~
+*.orig
+
+# Generated/compiled files
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+
+# Documentation builds
+docs/_build/
+site/
+
+# JWT/Session tokens
+*.jwt
+*.token
+session.json
+
+# Package lock files (optional - uncomment if needed)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
