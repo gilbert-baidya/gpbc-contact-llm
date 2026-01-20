@@ -16,9 +16,16 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// CORS configuration for development
+// CORS configuration for development and production
 const corsOptions = {
-  origin: ['http://localhost:3005', 'http://localhost:3000', 'http://localhost:3002', 'http://localhost:3003'],
+  origin: [
+    'http://localhost:3005',
+    'http://localhost:3000',
+    'http://localhost:3002',
+    'http://localhost:3003',
+    'https://gpbc-contact.netlify.app',
+    'https://*.netlify.app'
+  ],
   methods: ['GET', 'POST'],
   credentials: true,
   optionsSuccessStatus: 200
