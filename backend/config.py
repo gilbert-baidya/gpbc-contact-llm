@@ -20,13 +20,13 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4-turbo-preview"
     
     # Application
-    SECRET_KEY: str = "your-secret-key-change-this"
-    DEBUG: bool = True
-    ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
+    SECRET_KEY: str
+    DEBUG: bool = False
+    ALLOWED_ORIGINS: str = "https://gpbc-contact-beryl.vercel.app,http://localhost:3000,http://localhost:5173"
     
     # URLs
-    BACKEND_URL: str = "http://localhost:8000"
-    FRONTEND_URL: str = "http://localhost:3000"
+    BACKEND_URL: str = "https://gpbc-backend.up.railway.app"
+    FRONTEND_URL: str = "https://gpbc-contact-beryl.vercel.app"
     
     @property
     def CORS_ORIGINS(self) -> List[str]:
