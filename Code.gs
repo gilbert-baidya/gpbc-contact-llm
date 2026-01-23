@@ -17,22 +17,10 @@ const SHEET_NAMES = {
 
 /**
  * API handler for GET requests (stats and contacts)
- * Protected by API key authentication
+ * Public API - no authentication required for reading data
  */
 function doGet(e) {
   try {
-    // Get API key from Script Properties
-    const props = PropertiesService.getScriptProperties();
-    const validApiKey = props.getProperty('APLKEY');
-    
-    // Check authentication
-    const providedKey = e.parameter.key || '';
-    if (providedKey !== validApiKey) {
-      return ContentService
-        .createTextOutput(JSON.stringify({ error: 'Unauthorized' }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    
     // Handle different actions
     const action = e.parameter.action || '';
     
@@ -41,6 +29,8 @@ function doGet(e) {
         return getStats();
       case 'getContacts':
         return getContacts();
+      case 'getMessageHistory':
+        return getMessageHistory();
       default:
         return ContentService
           .createTextOutput(JSON.stringify({ error: 'Invalid action' }))
@@ -50,7 +40,7 @@ function doGet(e) {
   } catch (error) {
     Logger.log('Error in doGet: ' + error.toString());
     return ContentService
-      .createTextOutput(JSON.stringify({ error: 'Internal server error' }))
+      .createTextOutput(JSON.stringify({ error: 'Internal server error', message: error.toString() }))
       .setMimeType(ContentService.MimeType.JSON);
   }
 }
@@ -134,9 +124,8 @@ function getContacts() {
   const cityCol = headers.indexOf('City') !== -1 ? headers.indexOf('City') : headers.indexOf('city');
   const groupCol = headers.indexOf('Group') !== -1 ? headers.indexOf('Group') : headers.indexOf('group');
   
-  // Filter for opted-in contacts
+  // Map all contacts
   const contacts = rows
-    .filter(row => row[optInCol] === 'Yes')
     .map((row, index) => ({
       id: row[idCol] || (index + 1),
       name: row[nameCol] || '',
@@ -160,6 +149,35 @@ function getContacts() {
  */
 function doPost(e) {
   try {
+    // Check if this is an API call (has key parameter)
+    const providedKey = e.parameter.key || '';
+    
+    if (providedKey) {
+      // This is an API call, not a Twilio webhook
+      const props = PropertiesService.getScriptProperties();
+      const validApiKey = props.getProperty('APLKEY');
+      
+      if (providedKey !== validApiKey) {
+        return ContentService
+          .createTextOutput(JSON.stringify({ error: 'Unauthorized' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      const action = e.parameter.action || '';
+      
+      switch (action) {
+        case 'sendSMS':
+          return handleSendSMS(e);
+        case 'makeCall':
+          return handleMakeCall(e);
+        default:
+          return ContentService
+            .createTextOutput(JSON.stringify({ error: 'Invalid action' }))
+            .setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+    
+    // Otherwise, handle as Twilio webhook
     // Extract Twilio parameters
     const from = e.parameter.From || '';
     const body = e.parameter.Body || '';
@@ -482,4 +500,260 @@ function testWebhook() {
   
   const response = doPost(testEvent);
   Logger.log(response.getContent());
+}
+
+/**
+ * Handle Send SMS API call
+ */
+function handleSendSMS(e) {
+  try {
+    const postData = JSON.parse(e.postData.contents || '{}');
+    const { to, message, from } = postData;
+    
+    if (!to || !message) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ error: 'Missing required parameters: to, message' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Get Twilio credentials
+    const props = PropertiesService.getScriptProperties();
+    const TWILIO_ACCOUNT_SID = props.getProperty('TWILIO_ACCOUNT_SID');
+    const TWILIO_AUTH_TOKEN = props.getProperty('TWILIO_AUTH_TOKEN');
+    const TWILIO_PHONE = props.getProperty('TWILIO_PHONE_NUMBER');
+    
+    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_PHONE) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ error: 'Twilio credentials not configured' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Twilio API endpoint
+    const url = 'https://api.twilio.com/2010-04-01/Accounts/' + TWILIO_ACCOUNT_SID + '/Messages.json';
+    
+    // Create auth header
+    const authHeader = 'Basic ' + Utilities.base64Encode(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN);
+    
+    // Send SMS
+    const options = {
+      method: 'post',
+      headers: {
+        'Authorization': authHeader
+      },
+      payload: {
+        To: to,
+        From: from || TWILIO_PHONE,
+        Body: message
+      }
+    };
+    
+    const response = UrlFetchApp.fetch(url, options);
+    const result = JSON.parse(response.getContentText());
+    
+    // Log to SMS_Log sheet
+    logToSheet('SMS_Log', {
+      timestamp: new Date(),
+      to: to,
+      from: from || TWILIO_PHONE,
+      message: message,
+      status: result.status,
+      sid: result.sid,
+      error_code: result.error_code || '',
+      error_message: result.error_message || ''
+    });
+    
+    return ContentService
+      .createTextOutput(JSON.stringify({ 
+        success: true, 
+        sid: result.sid,
+        status: result.status,
+        to: result.to,
+        from: result.from
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+      
+  } catch (error) {
+    Logger.log('Error in handleSendSMS: ' + error.toString());
+    return ContentService
+      .createTextOutput(JSON.stringify({ error: 'Failed to send SMS: ' + error.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Handle Make Call API call
+ */
+function handleMakeCall(e) {
+  try {
+    const postData = JSON.parse(e.postData.contents || '{}');
+    const { to, message, from } = postData;
+    
+    if (!to || !message) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ error: 'Missing required parameters: to, message' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Get Twilio credentials
+    const props = PropertiesService.getScriptProperties();
+    const TWILIO_ACCOUNT_SID = props.getProperty('TWILIO_ACCOUNT_SID');
+    const TWILIO_AUTH_TOKEN = props.getProperty('TWILIO_AUTH_TOKEN');
+    const TWILIO_PHONE = props.getProperty('TWILIO_PHONE_NUMBER');
+    
+    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_PHONE) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ error: 'Twilio credentials not configured' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Create TwiML for voice message
+    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">' + escapeXml(message) + '</Say></Response>';
+    
+    // Twilio API endpoint for calls
+    const url = 'https://api.twilio.com/2010-04-01/Accounts/' + TWILIO_ACCOUNT_SID + '/Calls.json';
+    
+    // Create auth header
+    const authHeader = 'Basic ' + Utilities.base64Encode(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN);
+    
+    const options = {
+      method: 'post',
+      headers: {
+        'Authorization': authHeader
+      },
+      payload: {
+        To: to,
+        From: from || TWILIO_PHONE,
+        Twiml: twiml
+      }
+    };
+    
+    const response = UrlFetchApp.fetch(url, options);
+    const result = JSON.parse(response.getContentText());
+    
+    // Log to Call_Log sheet
+    logToSheet('Call_Log', {
+      timestamp: new Date(),
+      to: to,
+      from: from || TWILIO_PHONE,
+      message: message,
+      status: result.status,
+      sid: result.sid,
+      duration: result.duration || 0,
+      error_code: result.error_code || '',
+      error_message: result.error_message || ''
+    });
+    
+    return ContentService
+      .createTextOutput(JSON.stringify({ 
+        success: true, 
+        sid: result.sid,
+        status: result.status,
+        to: result.to,
+        from: result.from
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+      
+  } catch (error) {
+    Logger.log('Error in handleMakeCall: ' + error.toString());
+    return ContentService
+      .createTextOutput(JSON.stringify({ error: 'Failed to make call: ' + error.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Log to sheet helper function
+ */
+function logToSheet(sheetName, data) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(sheetName);
+    
+    // Create sheet if it doesn't exist
+    if (!sheet) {
+      sheet = ss.insertSheet(sheetName);
+      
+      // Add headers based on sheet type
+      if (sheetName === 'SMS_Log') {
+        sheet.appendRow(['Timestamp', 'To', 'From', 'Message', 'Status', 'SID', 'Error Code', 'Error Message']);
+      } else if (sheetName === 'Call_Log') {
+        sheet.appendRow(['Timestamp', 'To', 'From', 'Message', 'Status', 'SID', 'Duration', 'Error Code', 'Error Message']);
+      }
+    }
+    
+    // Append data row
+    const row = [];
+    for (const key in data) {
+      row.push(data[key]);
+    }
+    sheet.appendRow(row);
+    
+  } catch (error) {
+    Logger.log('Error logging to sheet: ' + error.toString());
+  }
+}
+
+/**
+ * Get message history from logs
+ */
+function getMessageHistory() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const smsSheet = ss.getSheetByName('SMS_Log');
+    const callSheet = ss.getSheetByName('Call_Log');
+    
+    const messages = [];
+    
+    // Get SMS logs
+    if (smsSheet) {
+      const smsData = smsSheet.getDataRange().getValues();
+      const smsHeaders = smsData[0];
+      const smsRows = smsData.slice(1);
+      
+      smsRows.forEach(row => {
+        messages.push({
+          type: 'sms',
+          timestamp: row[0],
+          to: row[1],
+          from: row[2],
+          message: row[3],
+          status: row[4],
+          sid: row[5]
+        });
+      });
+    }
+    
+    // Get Call logs
+    if (callSheet) {
+      const callData = callSheet.getDataRange().getValues();
+      const callHeaders = callData[0];
+      const callRows = callData.slice(1);
+      
+      callRows.forEach(row => {
+        messages.push({
+          type: 'call',
+          timestamp: row[0],
+          to: row[1],
+          from: row[2],
+          message: row[3],
+          status: row[4],
+          sid: row[5],
+          duration: row[6]
+        });
+      });
+    }
+    
+    // Sort by timestamp descending
+    messages.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    
+    return ContentService
+      .createTextOutput(JSON.stringify({ messages: messages.slice(0, 100) }))
+      .setMimeType(ContentService.MimeType.JSON);
+      
+  } catch (error) {
+    Logger.log('Error getting message history: ' + error.toString());
+    return ContentService
+      .createTextOutput(JSON.stringify({ messages: [] }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
 }

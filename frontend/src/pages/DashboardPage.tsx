@@ -1,22 +1,25 @@
 import React, { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { statisticsAPI, callsAPI } from '../api/client';
-import { getStats, BackendStats } from '../api/backendApi';
+import { fetchStats, getMessageHistory, Stats, Message } from '../services/googleAppsScriptService';
 import { BarChart3, Users, MessageSquare, Phone, Calendar } from 'lucide-react';
 
 export const DashboardPage: React.FC = () => {
-  const [backendStats, setBackendStats] = useState<BackendStats | null>(null);
+  const [backendStats, setBackendStats] = useState<Stats | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [recentMessages, setRecentMessages] = useState<Message[]>([]);
 
-  // Load stats from backend on mount
+  // Load stats from Google Apps Script on mount
   useEffect(() => {
     const loadStats = async () => {
       try {
         setIsLoading(true);
         setStatsError(null);
-        const data = await getStats();
+        const data = await fetchStats();
         setBackendStats(data);
+        
+        // Also load recent messages
+        const messages = await getMessageHistory();
+        setRecentMessages(messages.slice(0, 10));
       } catch (error: any) {
         console.error('Failed to load stats:', error);
         setStatsError(error.message || 'Failed to load statistics');
@@ -27,35 +30,6 @@ export const DashboardPage: React.FC = () => {
 
     loadStats();
   }, []);
-
-  const { data: stats } = useQuery({
-    queryKey: ['statistics'],
-    queryFn: () => statisticsAPI.get().then(res => res.data)
-  });
-
-  const { data: recentCalls } = useQuery({
-    queryKey: ['calls'],
-    queryFn: () => callsAPI.getAll({ limit: 10 }).then(res => res.data)
-  });
-
-  const StatCard: React.FC<{
-    icon: React.ReactNode;
-    title: string;
-    value: number | string;
-    color: string;
-  }> = ({ icon, title, value, color }) => (
-    <div className="card">
-      <div className="flex items-center gap-4">
-        <div className={`p-3 rounded-lg ${color}`}>
-          {icon}
-        </div>
-        <div>
-          <p className="text-sm text-gray-600">{title}</p>
-          <p className="text-2xl font-bold text-gray-900">{value}</p>
-        </div>
-      </div>
-    </div>
-  );
 
   return (
     <div className="space-y-6">
@@ -84,19 +58,19 @@ export const DashboardPage: React.FC = () => {
             </div>
             <div className="card bg-green-50">
               <h3 className="text-sm font-semibold text-green-900 mb-1">Opted In (Yes)</h3>
-              <p className="text-3xl font-bold text-green-600">{backendStats.optInYes || 0}</p>
+              <p className="text-3xl font-bold text-green-600">{backendStats.optInCount || 0}</p>
             </div>
             <div className="card bg-red-50">
               <h3 className="text-sm font-semibold text-red-900 mb-1">Opted Out (No)</h3>
-              <p className="text-3xl font-bold text-red-600">{backendStats.optInNo || 0}</p>
+              <p className="text-3xl font-bold text-red-600">{backendStats.optOutCount || 0}</p>
             </div>
             <div className="card bg-purple-50">
-              <h3 className="text-sm font-semibold text-purple-900 mb-1">English</h3>
-              <p className="text-3xl font-bold text-purple-600">{backendStats.english || 0}</p>
+              <h3 className="text-sm font-semibold text-purple-900 mb-1">Messages Sent</h3>
+              <p className="text-3xl font-bold text-purple-600">{recentMessages.filter(m => m.type === 'sms').length}</p>
             </div>
             <div className="card bg-orange-50">
-              <h3 className="text-sm font-semibold text-orange-900 mb-1">Bangla</h3>
-              <p className="text-3xl font-bold text-orange-600">{backendStats.bangla || 0}</p>
+              <h3 className="text-sm font-semibold text-orange-900 mb-1">Calls Made</h3>
+              <p className="text-3xl font-bold text-orange-600">{recentMessages.filter(m => m.type === 'call').length}</p>
             </div>
           </div>
           
@@ -131,95 +105,61 @@ export const DashboardPage: React.FC = () => {
 
       ) : null}
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard
-          icon={<Users className="w-6 h-6 text-blue-600" />}
-          title="Total Contacts"
-          value={stats?.total_contacts || 0}
-          color="bg-blue-100"
-        />
-        <StatCard
-          icon={<MessageSquare className="w-6 h-6 text-green-600" />}
-          title="Messages Sent"
-          value={stats?.total_messages_sent || 0}
-          color="bg-green-100"
-        />
-        <StatCard
-          icon={<Phone className="w-6 h-6 text-purple-600" />}
-          title="Calls Made"
-          value={stats?.total_calls_made || 0}
-          color="bg-purple-100"
-        />
-        <StatCard
-          icon={<Calendar className="w-6 h-6 text-orange-600" />}
-          title="Active Reminders"
-          value={stats?.scheduled_reminders || 0}
-          color="bg-orange-100"
-        />
-      </div>
-
       {/* Recent Activity */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Recent Calls */}
+        {/* Recent Messages */}
         <div className="card">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Recent Calls</h2>
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Recent Messages</h2>
           <div className="space-y-3">
-            {recentCalls && recentCalls.length > 0 ? (
-              recentCalls.map((call) => (
-                <div key={call.id} className="border-l-4 border-primary-500 pl-3 py-2">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-900">
-                      {call.caller_phone}
-                    </span>
-                    <span className={`text-xs px-2 py-1 rounded ${
-                      call.direction === 'inbound' 
-                        ? 'bg-green-100 text-green-800' 
-                        : 'bg-blue-100 text-blue-800'
+            {recentMessages.length > 0 ? (
+              recentMessages.map((message, index) => (
+                <div key={index} className="p-4 bg-gray-50 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-semibold text-gray-900">{message.to}</span>
+                    <span className={`px-2 py-1 text-xs rounded-full ${
+                      message.type === 'sms' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
                     }`}>
-                      {call.direction}
+                      {message.type.toUpperCase()}
                     </span>
                   </div>
-                  {call.conversation_summary && (
-                    <p className="text-sm text-gray-600 line-clamp-2">{call.conversation_summary}</p>
-                  )}
+                  <p className="text-sm text-gray-600 line-clamp-2">{message.message}</p>
                   <div className="flex items-center gap-3 mt-1">
                     <span className="text-xs text-gray-400">
-                      Duration: {Math.floor(call.duration / 60)}:{(call.duration % 60).toString().padStart(2, '0')}
+                      Status: {message.status}
                     </span>
                     <span className="text-xs text-gray-400">
-                      {new Date(call.created_at).toLocaleString()}
+                      {new Date(message.timestamp).toLocaleString()}
                     </span>
                   </div>
                 </div>
               ))
             ) : (
-              <p className="text-center text-gray-500 py-4">No call history yet</p>
+              <p className="text-center text-gray-500 py-4">No message history yet</p>
             )}
           </div>
         </div>
+      </div>
 
-        {/* Quick Actions */}
-        <div className="card">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Quick Actions</h2>
-          <div className="space-y-3">
-            <button className="w-full btn btn-primary flex items-center justify-center gap-2">
-              <MessageSquare className="w-5 h-5" />
-              Send Bulk Message
-            </button>
-            <button className="w-full btn btn-primary flex items-center justify-center gap-2">
-              <Phone className="w-5 h-5" />
-              Make Announcement Call
-            </button>
-            <button className="w-full btn btn-secondary flex items-center justify-center gap-2">
-              <Calendar className="w-5 h-5" />
-              Schedule Reminder
-            </button>
-            <button className="w-full btn btn-secondary flex items-center justify-center gap-2">
-              <Users className="w-5 h-5" />
-              Import Contacts
-            </button>
-          </div>
+      {/* Quick Actions */}
+      <div className="card">
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">Quick Actions</h2>
+        <div className="space-y-3">
+          <button className="w-full btn btn-primary flex items-center justify-center gap-2">
+            <MessageSquare className="w-5 h-5" />
+            Send Bulk Message
+          </button>
+          <button className="w-full btn btn-primary flex items-center justify-center gap-2">
+            <Phone className="w-5 h-5" />
+            Make Announcement Call
+          </button>
+          <button className="w-full btn btn-secondary flex items-center justify-center gap-2">
+            <Calendar className="w-5 h-5" />
+            Schedule Reminder
+          </button>
+          <button className="w-full btn btn-secondary flex items-center justify-center gap-2">
+            <Users className="w-5 h-5" />
+            Import Contacts
+          </button>
         </div>
       </div>
 

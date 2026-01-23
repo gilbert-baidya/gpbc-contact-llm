@@ -35,7 +35,7 @@ export interface BackendContact {
  */
 export async function getStats(): Promise<BackendStats> {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/statistics`, {
+    const response = await fetch(`${API_BASE_URL}/stats`, {
       method: 'GET',
       headers: {
         'Accept': 'application/json'

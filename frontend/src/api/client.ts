@@ -155,5 +155,5 @@ export const remindersAPI = {
 // Statistics API
 export const statisticsAPI = {
   get: () =>
-    api.get<Statistics>('/api/statistics')
+    api.get<Statistics>('/stats')
 };
