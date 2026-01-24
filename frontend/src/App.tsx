@@ -37,7 +37,7 @@ const NavLink: React.FC<{
       className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
         isActive
           ? 'bg-primary-600 text-white'
-          : 'text-gray-700 hover:bg-gray-100'
+          : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
       }`}
     >
       {icon}
@@ -81,23 +81,23 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* Mobile Header */}
-      <header className="lg:hidden fixed top-0 left-0 right-0 bg-white border-b border-gray-200 z-50 h-16">
+      <header className="lg:hidden fixed top-0 left-0 right-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 z-50 h-16">
         <div className="flex items-center justify-between h-full px-4">
           <div className="flex items-center gap-3">
             <div className="bg-primary-600 text-white p-2 rounded-lg">
               <Phone className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="font-bold text-base text-gray-900">Church Contact</h1>
+              <h1 className="font-bold text-base text-gray-900 dark:text-gray-100">Church Contact</h1>
             </div>
           </div>
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="p-2 hover:bg-gray-100 rounded-lg"
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
           >
-            <Menu className="w-6 h-6 text-gray-600" />
+            <Menu className="w-6 h-6 text-gray-600 dark:text-gray-300" />
           </button>
         </div>
       </header>
@@ -112,7 +112,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
       {/* Sidebar - Fixed state: expanded on desktop, overlay on mobile */}
       <aside
-        className={`fixed left-0 top-0 h-full bg-white border-r border-gray-200 transition-all duration-300 z-50 w-64 lg:block ${
+        className={`fixed left-0 top-0 h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 transition-all duration-300 z-50 w-64 lg:block ${
           mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         }`}
       >
@@ -161,15 +161,15 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           </div>
 
           {/* User Profile Section - Always expanded */}
-          <div className="p-4 border-t border-gray-200">
+          <div className="p-4 border-t border-gray-200 dark:border-gray-700">
             <div className="space-y-3">
-              <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+              <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
                   <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center text-white font-bold">
                     {user?.name?.charAt(0)?.toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{user?.name}</p>
-                    <p className="text-xs text-gray-500 truncate">{user?.email}</p>
+                    <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{user?.name}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{user?.email}</p>
                     <div className="flex items-center gap-1 mt-1">
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                         user?.role === 'admin' ? 'bg-purple-100 text-purple-700' :
@@ -203,12 +203,12 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       </main>
 
       {/* Mobile Bottom Navigation */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-40">
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 z-40">
         <div className="flex items-center justify-around h-16">
           <Link
             to="/"
             className={`flex flex-col items-center justify-center flex-1 h-full ${
-              location.pathname === '/' ? 'text-primary-600' : 'text-gray-600'
+              location.pathname === '/' ? 'text-primary-600' : 'text-gray-600 dark:text-gray-400'
             }`}
           >
             <LayoutDashboard className="w-5 h-5" />
@@ -217,7 +217,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           <Link
             to="/contacts"
             className={`flex flex-col items-center justify-center flex-1 h-full ${
-              location.pathname === '/contacts' ? 'text-primary-600' : 'text-gray-600'
+              location.pathname === '/contacts' ? 'text-primary-600' : 'text-gray-600 dark:text-gray-400'
             }`}
           >
             <Users className="w-5 h-5" />
@@ -226,7 +226,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           <Link
             to="/messaging"
             className={`flex flex-col items-center justify-center flex-1 h-full relative ${
-              location.pathname === '/messaging' ? 'text-primary-600' : 'text-gray-600'
+              location.pathname === '/messaging' ? 'text-primary-600' : 'text-gray-600 dark:text-gray-400'
             }`}
           >
             <MessageSquare className="w-5 h-5" />
@@ -238,7 +238,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           <Link
             to="/reminders"
             className={`flex flex-col items-center justify-center flex-1 h-full ${
-              location.pathname === '/reminders' ? 'text-primary-600' : 'text-gray-600'
+              location.pathname === '/reminders' ? 'text-primary-600' : 'text-gray-600 dark:text-gray-400'
             }`}
           >
             <Calendar className="w-5 h-5" />

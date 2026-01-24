@@ -7,10 +7,6 @@
   line-height: 1.5;
   font-weight: 400;
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -20,6 +16,14 @@
 body {
   margin: 0;
   min-height: 100vh;
+  background-color: #ffffff;
+  color: #1f2937;
+}
+
+/* Dark mode */
+.dark body {
+  background-color: #111827;
+  color: #f9fafb;
 }
 
 @layer components {
@@ -49,5 +53,17 @@ body {
   
   .card {
     @apply bg-white rounded-lg shadow-md p-6;
+  }
+  
+  .dark .card {
+    @apply bg-gray-800 text-gray-100;
+  }
+  
+  .dark .input {
+    @apply bg-gray-700 border-gray-600 text-gray-100;
+  }
+  
+  .dark .btn-secondary {
+    @apply bg-gray-700 text-gray-200 hover:bg-gray-600;
   }
 }
