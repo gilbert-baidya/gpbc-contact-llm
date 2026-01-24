@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchContacts, Contact } from '../services/googleAppsScriptService';
-import { Users, Search, Loader, Send } from 'lucide-react';
+import { Users, Search, Loader, Send, Phone } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 
@@ -74,16 +74,16 @@ export const ContactsPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Users className="w-8 h-8 text-primary-600" />
-          <h1 className="text-3xl font-bold text-gray-900">Contacts</h1>
+    <div className="space-y-4 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <Users className="w-6 h-6 sm:w-8 sm:h-8 text-primary-600" />
+          <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">Contacts</h1>
         </div>
         {selectedContacts.size > 0 && (
           <button
             onClick={handleSendToMessaging}
-            className="btn btn-primary flex items-center gap-2"
+            className="btn btn-primary flex items-center justify-center gap-2 w-full sm:w-auto"
           >
             <Send className="w-4 h-4" />
             Send Message ({selectedContacts.size})
@@ -125,11 +125,22 @@ export const ContactsPage: React.FC = () => {
           </div>
         ) : (
           <>
-            <div className="mb-4 text-sm text-gray-600">
-              Showing {filteredContacts.length} of {contacts.length} contacts
+            <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="text-sm text-gray-600">
+                Showing {filteredContacts.length} of {contacts.length} contacts
+              </div>
+              {filteredContacts.length > 0 && (
+                <button
+                  onClick={toggleSelectAll}
+                  className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+                >
+                  {selectedContacts.size === filteredContacts.length ? 'Deselect All' : 'Select All'}
+                </button>
+              )}
             </div>
 
-            <div className="overflow-x-auto">
+            {/* Desktop Table View */}
+            <div className="hidden lg:block overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gray-50">
                   <tr>
@@ -208,6 +219,67 @@ export const ContactsPage: React.FC = () => {
                   )}
                 </tbody>
               </table>
+            </div>
+
+            {/* Mobile/Tablet Card View */}
+            <div className="lg:hidden space-y-3">
+              {filteredContacts.length > 0 ? (
+                filteredContacts.map((contact) => (
+                  <div
+                    key={contact.id}
+                    className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow"
+                  >
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedContacts.has(contact.id)}
+                        onChange={() => toggleSelect(contact.id)}
+                        className="rounded mt-1"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="text-base font-semibold text-gray-900 truncate">
+                            {contact.name}
+                          </h3>
+                          <span className={`ml-2 px-2 py-1 text-xs rounded-full whitespace-nowrap ${
+                            contact.optIn === 'Yes' 
+                              ? 'bg-green-100 text-green-800' 
+                              : 'bg-red-100 text-red-800'
+                          }`}>
+                            {contact.optIn}
+                          </span>
+                        </div>
+                        <div className="space-y-1 text-sm text-gray-600">
+                          <div className="flex items-center gap-2">
+                            <Phone className="w-4 h-4 text-gray-400" />
+                            <span>{contact.phone}</span>
+                          </div>
+                          {contact.city && (
+                            <div className="flex items-center gap-2">
+                              <span className="text-gray-400">📍</span>
+                              <span>{contact.city}</span>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-3 text-xs">
+                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded">
+                              {contact.language}
+                            </span>
+                            {contact.group && (
+                              <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded">
+                                {contact.group}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-12 text-gray-500">
+                  {search ? 'No contacts match your search' : 'No contacts found'}
+                </div>
+              )}
             </div>
           </>
         )}

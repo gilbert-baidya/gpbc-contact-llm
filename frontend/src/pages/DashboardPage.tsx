@@ -32,11 +32,11 @@ export const DashboardPage: React.FC = () => {
   }, []);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <BarChart3 className="w-8 h-8 text-primary-600" />
-        <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+      <div className="flex items-center gap-2 sm:gap-3">
+        <BarChart3 className="w-6 h-6 sm:w-8 sm:h-8 text-primary-600" />
+        <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">Dashboard</h1>
       </div>
 
       {/* Error Message */}

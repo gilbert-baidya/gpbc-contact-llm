@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MessageSquare, Send, Users, Phone, Loader, UserPlus, X } from 'lucide-react';
+import { MessageSquare, Send, Phone, Loader, UserPlus, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fetchContacts, bulkSendSMS, bulkMakeCall, Contact } from '../services/googleAppsScriptService';
 
@@ -109,13 +109,13 @@ export const MessagingPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <MessageSquare className="w-8 h-8 text-primary-600" />
-        <h1 className="text-3xl font-bold text-gray-900">Send Message</h1>
+    <div className="space-y-4 sm:space-y-6">
+      <div className="flex items-center gap-2 sm:gap-3">
+        <MessageSquare className="w-6 h-6 sm:w-8 sm:h-8 text-primary-600" />
+        <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">Send Message</h1>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
         {/* Message Composer */}
         <div className="lg:col-span-2 card">
           <h2 className="text-xl font-bold text-gray-900 mb-4">Compose Message</h2>
@@ -125,8 +125,8 @@ export const MessagingPage: React.FC = () => {
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Message Type
             </label>
-            <div className="flex gap-4">
-              <label className="flex items-center gap-2">
+            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="radio"
                   value="sms"
@@ -135,9 +135,9 @@ export const MessagingPage: React.FC = () => {
                   className="rounded"
                 />
                 <MessageSquare className="w-4 h-4" />
-                SMS Text
+                <span className="font-medium">SMS Text</span>
               </label>
-              <label className="flex items-center gap-2">
+              <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="radio"
                   value="voice"
@@ -146,7 +146,7 @@ export const MessagingPage: React.FC = () => {
                   className="rounded"
                 />
                 <Phone className="w-4 h-4" />
-                Voice Call
+                <span className="font-medium">Voice Call</span>
               </label>
             </div>
           </div>
@@ -272,12 +272,12 @@ export const MessagingPage: React.FC = () => {
       {showContactModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black bg-opacity-50" onClick={() => setShowContactModal(false)}></div>
-          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col relative z-10 shadow-2xl">
-            <div className="p-6 border-b bg-white">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-2xl font-bold text-gray-900">Select Contacts</h2>
+          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] sm:max-h-[80vh] overflow-hidden flex flex-col relative z-10 shadow-2xl">
+            <div className="p-4 sm:p-6 border-b bg-white">
+              <div className="flex items-center justify-between mb-3 sm:mb-4">
+                <h2 className="text-lg sm:text-2xl font-bold text-gray-900">Select Contacts</h2>
                 <button onClick={() => setShowContactModal(false)} className="text-gray-400 hover:text-gray-600">
-                  <X className="w-6 h-6" />
+                  <X className="w-5 h-5 sm:w-6 sm:h-6" />
                 </button>
               </div>
               <input
@@ -290,7 +290,7 @@ export const MessagingPage: React.FC = () => {
               />
             </div>
             
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
               <div className="space-y-2">
                 {filteredContacts.map((contact) => {
                   const isSelected = selectedContacts.find(c => c.id === contact.id);
@@ -305,14 +305,14 @@ export const MessagingPage: React.FC = () => {
                         type="checkbox"
                         checked={!!isSelected}
                         onChange={() => toggleContact(contact)}
-                        className="rounded"
+                        className="rounded flex-shrink-0"
                       />
-                      <div className="flex-1">
-                        <p className="font-medium text-gray-900">{contact.name}</p>
-                        <p className="text-sm text-gray-600">{contact.phone}</p>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-gray-900 truncate">{contact.name}</p>
+                        <p className="text-sm text-gray-600 truncate">{contact.phone}</p>
                       </div>
                       {contact.city && (
-                        <span className="text-xs text-gray-500">{contact.city}</span>
+                        <span className="hidden sm:inline text-xs text-gray-500">{contact.city}</span>
                       )}
                     </label>
                   );
@@ -323,14 +323,14 @@ export const MessagingPage: React.FC = () => {
               )}
             </div>
 
-            <div className="p-6 border-t bg-gray-50">
-              <div className="flex justify-between items-center">
+            <div className="p-4 sm:p-6 border-t bg-gray-50">
+              <div className="flex flex-col sm:flex-row justify-between items-center gap-3">
                 <p className="text-sm text-gray-600">
                   {selectedContacts.length} contact(s) selected
                 </p>
                 <button
                   onClick={() => setShowContactModal(false)}
-                  className="btn btn-primary"
+                  className="btn btn-primary w-full sm:w-auto"
                 >
                   Done
                 </button>
