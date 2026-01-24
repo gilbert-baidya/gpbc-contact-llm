@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { fetchStats, getMessageHistory, Stats, Message } from '../services/googleAppsScriptService';
 import { BarChart3, Users, MessageSquare, Phone, Calendar } from 'lucide-react';
 
 export const DashboardPage: React.FC = () => {
+  const navigate = useNavigate();
   const [backendStats, setBackendStats] = useState<Stats | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -78,27 +80,36 @@ export const DashboardPage: React.FC = () => {
           <div className="card">
             <h2 className="text-xl font-bold text-gray-900 mb-4">Groups</h2>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-lg">
+              <button
+                onClick={() => navigate('/messaging?group=Men')}
+                className="flex items-center gap-3 p-4 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors cursor-pointer text-left"
+              >
                 <div className="text-4xl">👨</div>
                 <div>
                   <h3 className="text-sm font-semibold text-blue-900">Men</h3>
                   <p className="text-2xl font-bold text-blue-600">{backendStats.menCount || 0}</p>
                 </div>
-              </div>
-              <div className="flex items-center gap-3 p-4 bg-pink-50 rounded-lg">
+              </button>
+              <button
+                onClick={() => navigate('/messaging?group=Women')}
+                className="flex items-center gap-3 p-4 bg-pink-50 rounded-lg hover:bg-pink-100 transition-colors cursor-pointer text-left"
+              >
                 <div className="text-4xl">👩</div>
                 <div>
                   <h3 className="text-sm font-semibold text-pink-900">Women</h3>
                   <p className="text-2xl font-bold text-pink-600">{backendStats.womenCount || 0}</p>
                 </div>
-              </div>
-              <div className="flex items-center gap-3 p-4 bg-indigo-50 rounded-lg">
+              </button>
+              <button
+                onClick={() => navigate('/messaging?group=YoungAdult')}
+                className="flex items-center gap-3 p-4 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors cursor-pointer text-left"
+              >
                 <div className="text-4xl">🎓</div>
                 <div>
                   <h3 className="text-sm font-semibold text-indigo-900">Young Adults</h3>
                   <p className="text-2xl font-bold text-indigo-600">{backendStats.youngAdultCount || 0}</p>
                 </div>
-              </div>
+              </button>
             </div>
           </div>
         </>

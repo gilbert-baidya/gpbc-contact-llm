@@ -41,16 +41,32 @@ const NavLink: React.FC<{
       }`}
     >
       {icon}
-      <span className="font-medium">{children}</span>
+      {children}
     </Link>
   );
 };
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [sidebarOpen, setSidebarOpen] = React.useState(true);
+  // Lock sidebar open on desktop (>= 1024px), closed on mobile
+  const [sidebarOpen, setSidebarOpen] = React.useState(() => window.innerWidth >= 1024);
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
   const { user, logout, canSendMessages } = useAuth();
   const navigate = useNavigate();
+
+  // Lock sidebar state based on screen size
+  React.useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth >= 1024) {
+        setSidebarOpen(true); // Always expanded on desktop
+      } else {
+        setSidebarOpen(false); // Always collapsed on mobile
+      }
+    };
+
+    handleResize(); // Set initial state
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Close mobile menu on route change
   const location = useLocation();
@@ -94,57 +110,60 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         />
       )}
 
-      {/* Sidebar */}
+      {/* Sidebar - Fixed state: expanded on desktop, overlay on mobile */}
       <aside
-        className={`fixed left-0 top-0 h-full bg-white border-r border-gray-200 transition-all duration-300 z-50 ${
-          sidebarOpen ? 'w-64' : 'w-20'
-        } lg:block ${
+        className={`fixed left-0 top-0 h-full bg-white border-r border-gray-200 transition-all duration-300 z-50 w-64 lg:block ${
           mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         }`}
       >
         <div className="flex flex-col h-full">
           <div className="p-4 flex-1">
-            <div className="flex items-center gap-3 mb-8">
+            {/* Mobile: Show phone icon only */}
+            <div className="flex items-center gap-3 mb-8 lg:hidden">
               <div className="bg-primary-600 text-white p-2 rounded-lg">
                 <Phone className="w-6 h-6" />
               </div>
-              {sidebarOpen && (
-                <div>
-                  <h1 className="font-bold text-lg text-gray-900">Church Contact</h1>
-                  <p className="text-xs text-gray-500">Communication System</p>
-                </div>
-              )}
+            </div>
+
+            {/* Desktop: Show logo + text (always expanded) */}
+            <div className="hidden lg:flex items-center gap-3 mb-8">
+              <div className="bg-primary-600 text-white p-2 rounded-lg flex-shrink-0">
+                <Phone className="w-6 h-6" />
+              </div>
+              <div>
+                <h1 className="font-bold text-lg text-gray-900">Church Contact</h1>
+                <p className="text-xs text-gray-500">Communication System</p>
+              </div>
             </div>
 
             <nav className="space-y-2">
               <NavLink to="/" icon={<LayoutDashboard className="w-5 h-5" />}>
-                {sidebarOpen && 'Dashboard'}
+                <span className="font-medium">Dashboard</span>
               </NavLink>
               <NavLink to="/contacts" icon={<Users className="w-5 h-5" />}>
-                {sidebarOpen && 'Contacts'}
+                <span className="font-medium">Contacts</span>
               </NavLink>
               <NavLink to="/messaging" icon={<MessageSquare className="w-5 h-5" />}>
-                {sidebarOpen && 'Messaging'}
-                {!canSendMessages && sidebarOpen && (
+                <span className="font-medium">Messaging</span>
+                {!canSendMessages && (
                   <span className="ml-auto">
                     <Shield className="w-4 h-4 text-gray-400" />
                   </span>
                 )}
               </NavLink>
               <NavLink to="/reminders" icon={<Calendar className="w-5 h-5" />}>
-                {sidebarOpen && 'Reminders'}
+                <span className="font-medium">Reminders</span>
               </NavLink>
               <NavLink to="/settings" icon={<Settings className="w-5 h-5" />}>
-                {sidebarOpen && 'Settings'}
+                <span className="font-medium">Settings</span>
               </NavLink>
             </nav>
           </div>
 
-          {/* User Profile Section */}
+          {/* User Profile Section - Always expanded */}
           <div className="p-4 border-t border-gray-200">
-            {sidebarOpen ? (
-              <div className="space-y-3">
-                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+            <div className="space-y-3">
+              <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
                   <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center text-white font-bold">
                     {user?.name?.charAt(0)?.toUpperCase()}
                   </div>
@@ -172,33 +191,15 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   Logout
                 </button>
               </div>
-            ) : (
-              <button
-                onClick={handleLogout}
-                className="w-full p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors"
-                title="Logout"
-              >
-                <LogOut className="w-5 h-5 mx-auto" />
-              </button>
-            )}
+            </div>
           </div>
+        </aside>
 
-          <button
-            className="hidden lg:block absolute top-4 right-4 p-2 hover:bg-gray-100 rounded-lg"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-          >
-            <Menu className="w-5 h-5 text-gray-600" />
-          </button>
-        </div>
-      </aside>
-
-      {/* Main Content */}
+      {/* Main Content - Fixed margin: 0 on mobile, 256px on desktop */}
       <main
-        className={`transition-all duration-300 lg:${
-          sidebarOpen ? 'ml-64' : 'ml-20'
-        } pt-16 lg:pt-0 pb-20 lg:pb-0`}
+        className="transition-all duration-300 pt-16 lg:pt-0 pb-20 lg:pb-0 lg:ml-64"
       >
-        <div className="p-4 sm:p-6 lg:p-8">{children}</div>
+        <div className="px-3 py-4 sm:p-6 lg:p-8">{children}</div>
       </main>
 
       {/* Mobile Bottom Navigation */}

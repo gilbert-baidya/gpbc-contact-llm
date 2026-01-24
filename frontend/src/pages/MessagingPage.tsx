@@ -1,9 +1,13 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { MessageSquare, Send, Phone, Loader, UserPlus, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fetchContacts, bulkSendSMS, bulkMakeCall, Contact } from '../services/googleAppsScriptService';
 
 export const MessagingPage: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const groupFilter = searchParams.get('group');
+  
   const [messageContent, setMessageContent] = useState('');
   const [messageType, setMessageType] = useState<'sms' | 'voice'>('sms');
   const [sendToAll, setSendToAll] = useState(false);
@@ -16,8 +20,11 @@ export const MessagingPage: React.FC = () => {
 
   useEffect(() => {
     loadContacts();
-    checkPreSelectedContacts();
   }, []);
+
+  useEffect(() => {
+    checkPreSelectedContacts();
+  }, [allContacts, groupFilter]);
 
   const loadContacts = async () => {
     try {
@@ -30,6 +37,16 @@ export const MessagingPage: React.FC = () => {
   };
 
   const checkPreSelectedContacts = () => {
+    // Check if coming from group click
+    if (groupFilter && allContacts.length > 0) {
+      const groupContacts = allContacts.filter(c => c.group === groupFilter);
+      setSelectedContacts(groupContacts);
+      setSendToAll(false);
+      toast.success(`${groupContacts.length} contacts selected from ${groupFilter} group`);
+      return;
+    }
+
+    // Check session storage
     const preSelected = sessionStorage.getItem('selectedSheetContacts');
     if (preSelected) {
       const contacts = JSON.parse(preSelected);
@@ -109,75 +126,78 @@ export const MessagingPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-4 sm:space-y-6">
+    <div className="space-y-3 sm:space-y-4 lg:space-y-6">
+      {/* Page Header - Compact on mobile */}
       <div className="flex items-center gap-2 sm:gap-3">
-        <MessageSquare className="w-6 h-6 sm:w-8 sm:h-8 text-primary-600" />
-        <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">Send Message</h1>
+        <MessageSquare className="w-5 h-5 sm:w-6 sm:h-6 lg:w-8 lg:h-8 text-primary-600" />
+        <h1 className="text-lg sm:text-xl lg:text-2xl xl:text-3xl font-bold text-gray-900">Send Message</h1>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
         {/* Message Composer */}
-        <div className="lg:col-span-2 card">
-          <h2 className="text-xl font-bold text-gray-900 mb-4">Compose Message</h2>
+        <div className="lg:col-span-2 card p-3 sm:p-4 lg:p-6">
+          <h2 className="text-base sm:text-lg lg:text-xl font-bold text-gray-900 mb-3 sm:mb-4">Compose Message</h2>
 
-          {/* Message Type */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+          {/* Message Type - Compact toggle buttons */}
+          <div className="mb-3 sm:mb-4">
+            <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2">
               Message Type
             </label>
-            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  value="sms"
-                  checked={messageType === 'sms'}
-                  onChange={(e) => setMessageType(e.target.value as 'sms')}
-                  className="rounded"
-                />
+            <div className="inline-flex rounded-lg border border-gray-200 p-1 bg-gray-50">
+              <button
+                type="button"
+                onClick={() => setMessageType('sms')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  messageType === 'sms'
+                    ? 'bg-primary-600 text-white shadow-sm'
+                    : 'text-gray-700 hover:text-gray-900'
+                }`}
+              >
                 <MessageSquare className="w-4 h-4" />
-                <span className="font-medium">SMS Text</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  value="voice"
-                  checked={messageType === 'voice'}
-                  onChange={(e) => setMessageType(e.target.value as 'voice')}
-                  className="rounded"
-                />
+                <span>SMS Text</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMessageType('voice')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                  messageType === 'voice'
+                    ? 'bg-primary-600 text-white shadow-sm'
+                    : 'text-gray-700 hover:text-gray-900'
+                }`}
+              >
                 <Phone className="w-4 h-4" />
-                <span className="font-medium">Voice Call</span>
-              </label>
+                <span>Voice Call</span>
+              </button>
             </div>
           </div>
 
           {/* Message Content */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+          <div className="mb-3 sm:mb-4">
+            <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2">
               Message
             </label>
             <textarea
               value={messageContent}
               onChange={(e) => setMessageContent(e.target.value)}
-              className="input min-h-[150px]"
-              placeholder={messageType === 'sms' ? 'Type your message...' : 'This message will be read aloud to recipients...'}
+              className="input min-h-[120px] sm:min-h-[140px] lg:min-h-[150px] text-sm"
+              placeholder={messageType === 'sms' ? 'Type your message...' : 'This message will be read aloud...'}
             />
             <p className="text-xs text-gray-500 mt-1">
               {messageContent.length} characters
             </p>
           </div>
 
-          {/* Templates */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+          {/* Templates - Scrollable on mobile */}
+          <div className="mb-3 sm:mb-4">
+            <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2">
               Quick Templates
             </label>
-            <div className="flex flex-wrap gap-2">
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2">
               {templates.map((template) => (
                 <button
                   key={template.label}
                   onClick={() => setMessageContent(template.text)}
-                  className="btn btn-secondary text-sm"
+                  className="btn btn-secondary text-xs sm:text-sm py-2 px-3 whitespace-nowrap"
                 >
                   {template.label}
                 </button>
@@ -185,12 +205,12 @@ export const MessagingPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Recipients */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+          {/* Recipients - Compact on mobile */}
+          <div className="mb-4 sm:mb-5 lg:mb-6">
+            <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2">
               Recipients
             </label>
-            <label className="flex items-center gap-2 mb-2">
+            <label className="flex items-center gap-2 mb-3 p-2.5 bg-gray-50 rounded-lg">
               <input
                 type="checkbox"
                 checked={sendToAll}
@@ -200,60 +220,75 @@ export const MessagingPage: React.FC = () => {
                 }}
                 className="rounded"
               />
-              Send to all opted-in contacts ({allContacts.length})
+              <span className="text-sm">Send to all ({allContacts.length})</span>
             </label>
             {!sendToAll && (
-              <button
-                onClick={() => setShowContactModal(true)}
-                className="btn btn-secondary flex items-center gap-2 text-sm"
-              >
-                <UserPlus className="w-4 h-4" />
-                Select Contacts ({selectedContacts.length})
-              </button>
+              <div>
+                <button
+                  onClick={() => setShowContactModal(true)}
+                  className="btn btn-secondary flex items-center justify-center gap-2 text-sm w-full sm:w-auto"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  Select Contacts ({selectedContacts.length})
+                </button>
+                {selectedContacts.length > 0 && (
+                  <div className="mt-2 p-2.5 bg-blue-50 rounded-lg border border-blue-200">
+                    <p className="text-xs font-medium text-blue-900 mb-1">Selected:</p>
+                    <p className="text-xs text-blue-700 line-clamp-2">
+                      {selectedContacts.map(c => c.name).join(', ')}
+                    </p>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
-          {/* Send Button */}
+          {/* Send Button - Sticky on mobile */}
           <button
             onClick={handleSend}
             disabled={isSending || (!sendToAll && selectedContacts.length === 0)}
-            className="btn btn-primary w-full flex items-center justify-center gap-2"
+            className="btn btn-primary w-full flex items-center justify-center gap-2 py-3 text-base font-semibold shadow-lg"
           >
             {isSending ? (
               <>
-                <Loader className="w-4 h-4 animate-spin" />
+                <Loader className="w-5 h-5 animate-spin" />
                 Sending {progress.sent}/{progress.total}...
               </>
             ) : (
               <>
-                <Send className="w-4 h-4" />
-                Send {messageType === 'sms' ? 'SMS' : 'Voice Call'}
+                <Send className="w-5 h-5" />
+                Send {messageType === 'sms' ? 'SMS' : 'Call'}
               </>
             )}
           </button>
         </div>
 
-        {/* Selected Contacts Sidebar */}
-        <div className="card">
-          <h2 className="text-lg font-bold text-gray-900 mb-4">
+        {/* Selected Contacts Sidebar - Hidden on mobile when no selection */}
+        <div className={`card p-3 sm:p-4 lg:p-6 ${!sendToAll && selectedContacts.length === 0 ? 'hidden lg:block' : ''}`}>
+          <h2 className="text-base sm:text-lg font-bold text-gray-900 mb-3 sm:mb-4">
             {sendToAll ? 'All Contacts' : 'Selected Contacts'}
           </h2>
           
           {sendToAll ? (
-            <p className="text-sm text-gray-600">
-              Message will be sent to all {allContacts.length} opted-in contacts
-            </p>
+            <div className="p-3 bg-green-50 rounded-lg border border-green-200">
+              <p className="text-sm text-green-900 font-medium">
+                Message will be sent to all {allContacts.length} opted-in contacts
+              </p>
+            </div>
           ) : selectedContacts.length > 0 ? (
-            <div className="space-y-2 max-h-96 overflow-y-auto">
+            <div className="space-y-2 max-h-[50vh] sm:max-h-96 overflow-y-auto">
               {selectedContacts.map((contact) => (
-                <div key={contact.id} className="flex items-center justify-between p-2 bg-gray-50 rounded text-sm">
-                  <div>
-                    <p className="font-medium">{contact.name}</p>
-                    <p className="text-gray-600 text-xs">{contact.phone}</p>
+                <div key={contact.id} className="flex items-center justify-between p-2.5 sm:p-3 bg-gray-50 rounded-lg text-sm border border-gray-200 hover:border-gray-300 transition-colors">
+                  <div className="flex-1 min-w-0 pr-2">
+                    <p className="font-semibold text-gray-900 text-sm sm:text-base truncate">
+                      {contact.name || 'Unknown'}
+                    </p>
+                    <p className="text-gray-500 text-xs mt-0.5 truncate">{contact.phone}</p>
                   </div>
                   <button
                     onClick={() => removeContact(contact.id)}
-                    className="text-red-600 hover:text-red-800"
+                    className="text-red-600 hover:text-red-800 hover:bg-red-50 p-1.5 rounded-md transition-colors flex-shrink-0"
+                    aria-label="Remove contact"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -261,9 +296,12 @@ export const MessagingPage: React.FC = () => {
               ))}
             </div>
           ) : (
-            <p className="text-sm text-gray-500">
-              No contacts selected. Click "Select Contacts" to choose recipients.
-            </p>
+            <div className="p-4 text-center">
+              <UserPlus className="w-12 h-12 mx-auto text-gray-300 mb-2" />
+              <p className="text-sm text-gray-500">
+                No contacts selected. Click "Select Contacts" to choose recipients.
+              </p>
+            </div>
           )}
         </div>
       </div>
