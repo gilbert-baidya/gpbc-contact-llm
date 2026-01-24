@@ -160,26 +160,38 @@ export async function sendSMS(to: string, message: string, from?: string): Promi
   try {
     const url = buildURL('sendSMS');
     
+    console.log('📤 Sending SMS to:', to);
+    console.log('📤 URL:', url);
+    
+    // Use a simple POST to avoid CORS preflight on Apps Script
+    const formBody = new URLSearchParams({
+      to,
+      message,
+      ...(from ? { from } : {})
+    });
+
+    console.log('Sending payload:', formBody.toString());
+
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ to, message, from })
+      body: formBody
     });
-    
+
+    console.log('Response status:', response.status);
+
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.statusText}`);
+      console.error('HTTP error:', response.status, response.statusText);
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
-    
+
     const data = await response.json();
+    console.log('✅ SMS sent successfully:', data);
     
     if (data.error) {
       console.error('❌ SMS sending failed:', data.error);
       return { success: false, error: data.error };
     }
     
-    console.log('✅ SMS sent successfully:', data);
     return data as SendSMSResponse;
     
   } catch (error) {
@@ -198,28 +210,33 @@ export async function makeCall(to: string, message: string, from?: string): Prom
   try {
     const url = buildURL('makeCall');
     
+    console.log('📞 Making call to:', to);
+    
+    // Use a simple POST to avoid CORS preflight on Apps Script
+    const formBody = new URLSearchParams({
+      to,
+      message,
+      ...(from ? { from } : {})
+    });
+
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ to, message, from })
+      body: formBody
     });
-    
+
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.statusText}`);
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
-    
+
     const data = await response.json();
-    
+    console.log('✅ Call initiated successfully:', data);
+
     if (data.error) {
       console.error('❌ Call failed:', data.error);
       return { success: false, error: data.error };
     }
     
-    console.log('✅ Call initiated successfully:', data);
     return data as MakeCallResponse;
-    
   } catch (error) {
     console.error('❌ Error making call:', error);
     return { 

@@ -32,11 +32,17 @@ export const ContactsPage: React.FC = () => {
     }
   };
 
-  const filteredContacts = contacts.filter(contact =>
-    contact.name.toLowerCase().includes(search.toLowerCase()) ||
-    contact.phone.includes(search) ||
-    (contact.city && contact.city.toLowerCase().includes(search.toLowerCase()))
-  );
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredContacts = contacts.filter((contact) => {
+    const name = (contact.name ?? '').toString().toLowerCase();
+    const phone = (contact.phone ?? '').toString();
+    const city = (contact.city ?? '').toString().toLowerCase();
+    return (
+      name.includes(normalizedSearch) ||
+      phone.includes(search) ||
+      city.includes(normalizedSearch)
+    );
+  });
 
   const toggleSelectAll = () => {
     if (selectedContacts.size === filteredContacts.length) {
