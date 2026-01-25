@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { MessageSquare, Send, Phone, Loader, UserPlus, X, Sparkles, Wand2, Info } from 'lucide-react';
+import { MessageSquare, Send, Phone, Loader, UserPlus, X, Sparkles, Wand2, Info, AlertTriangle, Eraser } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fetchContacts, bulkSendSMS, bulkMakeCall, Contact } from '../services/googleAppsScriptService';
 import { llmApi, getBackendInfo } from '../api/llmBackend';
@@ -22,6 +22,129 @@ export const MessagingPage: React.FC = () => {
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [showSmsInfo, setShowSmsInfo] = useState(false);
+
+  // SMS Text Sanitizer - Converts Unicode to GSM-safe ASCII
+  const sanitizeSmsText = (text: string): string => {
+    if (!text) return text;
+
+    let cleaned = text;
+
+    // Step 1: Normalize Unicode to decomposed form (NFKD)
+    cleaned = cleaned.normalize('NFKD');
+
+    // Step 2: Replace common Unicode characters with ASCII equivalents
+    const replacements: Record<string, string> = {
+      // Smart quotes
+      '\u2018': "'",  // Left single quotation mark
+      '\u2019': "'",  // Right single quotation mark
+      '\u201C': '"',  // Left double quotation mark
+      '\u201D': '"',  // Right double quotation mark
+      '\u201A': ',',  // Single low-9 quotation mark
+      '\u201E': '"',  // Double low-9 quotation mark
+      '\u2039': '<',  // Single left-pointing angle quotation
+      '\u203A': '>',  // Single right-pointing angle quotation
+      // Dashes and hyphens
+      '\u2013': '-',  // En dash
+      '\u2014': '-',  // Em dash
+      '\u2015': '-',  // Horizontal bar
+      '\u2212': '-',  // Minus sign
+      // Spaces
+      '\u00A0': ' ',  // Non-breaking space
+      '\u2000': ' ',  // En quad
+      '\u2001': ' ',  // Em quad
+      '\u2002': ' ',  // En space
+      '\u2003': ' ',  // Em space
+      '\u2004': ' ',  // Three-per-em space
+      '\u2005': ' ',  // Four-per-em space
+      '\u2006': ' ',  // Six-per-em space
+      '\u2007': ' ',  // Figure space
+      '\u2008': ' ',  // Punctuation space
+      '\u2009': ' ',  // Thin space
+      '\u200A': ' ',  // Hair space
+      '\u202F': ' ',  // Narrow no-break space
+      '\u205F': ' ',  // Medium mathematical space
+      // Ellipsis
+      '\u2026': '...',  // Horizontal ellipsis
+      // Bullets and symbols
+      '\u2022': '*',  // Bullet
+      '\u2023': '>',  // Triangular bullet
+      '\u2043': '-',  // Hyphen bullet
+      '\u25E6': '*',  // White bullet
+      '\u00B7': '*',  // Middle dot
+      '\u2219': '*',  // Bullet operator
+      // Currency
+      '\u20AC': 'EUR', // Euro sign (keep € for GSM-7)
+      '\u00A2': 'c',   // Cent sign
+      '\u00A3': '£',   // Pound sign (GSM-7 compatible)
+      '\u00A5': '¥',   // Yen sign (GSM-7 compatible)
+      // Copyright and trademark
+      '\u00A9': '(c)',   // Copyright
+      '\u00AE': '(R)',   // Registered trademark
+      '\u2122': '(TM)',  // Trademark
+      // Arrows
+      '\u2190': '<-',  // Leftwards arrow
+      '\u2192': '->',  // Rightwards arrow
+      '\u2191': '^',   // Upwards arrow
+      '\u2193': 'v',   // Downwards arrow
+    };
+
+    // Apply replacements
+    Object.entries(replacements).forEach(([unicode, ascii]) => {
+      cleaned = cleaned.replace(new RegExp(unicode, 'g'), ascii);
+    });
+
+    // Step 3: Remove zero-width and invisible characters
+    cleaned = cleaned.replace(/[\u200B-\u200D\uFEFF]/g, '');
+
+    // Step 4: Remove emojis and other Unicode symbols (beyond Basic Latin + GSM-7 extensions)
+    // Keep only GSM-7 compatible characters
+    const gsmCharsPattern = /[^@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&'()*+,\-.\/:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà\n\r\^{}\\[~\]|€\s]/g;
+    cleaned = cleaned.replace(gsmCharsPattern, '');
+
+    // Step 5: Collapse multiple spaces
+    cleaned = cleaned.replace(/  +/g, ' ');
+
+    // Step 6: Trim whitespace
+    cleaned = cleaned.trim();
+
+    return cleaned;
+  };
+
+  // Detect problematic Unicode characters
+  const detectUnicodeIssues = (text: string): { hasIssues: boolean; issues: string[] } => {
+    const issues: string[] = [];
+    
+    if (/[\u2018\u2019\u201C\u201D]/.test(text)) {
+      issues.push('Smart quotes detected');
+    }
+    if (/[\u2013\u2014]/.test(text)) {
+      issues.push('Em/en dashes detected');
+    }
+    if (/\u00A0/.test(text)) {
+      issues.push('Non-breaking spaces detected');
+    }
+    if (/[\u200B-\u200D\uFEFF]/.test(text)) {
+      issues.push('Invisible characters detected');
+    }
+    if (/[\p{Emoji}]/u.test(text)) {
+      issues.push('Emojis detected');
+    }
+    // Detect non-Latin scripts (Bengali, Hindi, Arabic, Chinese, etc.)
+    if (/[\u0980-\u09FF]/.test(text)) {
+      issues.push('Bengali characters detected');
+    }
+    if (/[\u0900-\u097F]/.test(text)) {
+      issues.push('Hindi characters detected');
+    }
+    if (/[\u0600-\u06FF]/.test(text)) {
+      issues.push('Arabic characters detected');
+    }
+    if (/[\u4E00-\u9FFF]/.test(text)) {
+      issues.push('Chinese characters detected');
+    }
+
+    return { hasIssues: issues.length > 0, issues };
+  };
 
   // Calculate SMS segments and cost
   const calculateSmsInfo = (text: string) => {
@@ -69,6 +192,18 @@ export const MessagingPage: React.FC = () => {
   };
 
   const smsInfo = calculateSmsInfo(messageContent);
+  const unicodeIssues = messageType === 'sms' ? detectUnicodeIssues(messageContent) : { hasIssues: false, issues: [] };
+
+  // Handler to clean text
+  const handleCleanText = () => {
+    const cleaned = sanitizeSmsText(messageContent);
+    if (cleaned !== messageContent) {
+      setMessageContent(cleaned);
+      toast.success('Text cleaned! Converted to GSM-7 format.');
+    } else {
+      toast('Text is already GSM-7 compatible', { icon: '✓' });
+    }
+  };
 
   useEffect(() => {
     loadContacts();
@@ -154,8 +289,9 @@ export const MessagingPage: React.FC = () => {
 
               console.log(`Personalizing for ${contact.name}: "${messageContent}" → "${personalizedMsg}"`);
 
-              // Send personalized message
-              await bulkSendSMS([contact], personalizedMsg);
+              // Send personalized message (sanitize for SMS)
+              const finalMsg = sanitizeSmsText(personalizedMsg);
+              await bulkSendSMS([contact], finalMsg);
               sent++;
               setProgress({ sent, total: targets.length });
               
@@ -163,8 +299,9 @@ export const MessagingPage: React.FC = () => {
               await new Promise(resolve => setTimeout(resolve, 500));
             } catch (error) {
               console.error(`Failed to personalize for ${contact.name}:`, error);
-              // Fallback to original message
-              await bulkSendSMS([contact], messageContent);
+              // Fallback to original message (sanitized)
+              const fallbackMsg = sanitizeSmsText(messageContent);
+              await bulkSendSMS([contact], fallbackMsg);
               sent++;
               setProgress({ sent, total: targets.length });
             }
@@ -175,8 +312,15 @@ export const MessagingPage: React.FC = () => {
           const onProgress = (sent: number) => {
             setProgress({ sent, total: targets.length });
           };
-          await bulkSendSMS(targets, messageContent, onProgress);
-          toast.success(`SMS sent to ${targets.length} contact(s)`);
+          // Sanitize message before sending for SMS
+          const finalMessage = messageType === 'sms' ? sanitizeSmsText(messageContent) : messageContent;
+          await bulkSendSMS(targets, finalMessage, onProgress);
+          
+          if (finalMessage !== messageContent) {
+            toast.success(`SMS cleaned and sent to ${targets.length} contact(s)`);
+          } else {
+            toast.success(`SMS sent to ${targets.length} contact(s)`);
+          }
         }
       } else {
         const onProgress = (sent: number) => {
@@ -399,6 +543,30 @@ export const MessagingPage: React.FC = () => {
               )}
             </div>
             
+            {/* Unicode Warning Banner */}
+            {messageType === 'sms' && smsInfo.isUnicode && unicodeIssues.hasIssues && (
+              <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-amber-900 mb-1">
+                      Unicode Detected – SMS Cost May Double!
+                    </p>
+                    <p className="text-xs text-amber-700 mb-2">
+                      {unicodeIssues.issues.join(', ')}. Your message will use Unicode encoding (70 chars/segment vs 160 for GSM).
+                    </p>
+                    <button
+                      onClick={handleCleanText}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded transition-colors"
+                    >
+                      <Eraser className="w-3.5 h-3.5" />
+                      Clean Text (Convert to GSM-7)
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            
             {/* SMS Stats Display */}
             {messageType === 'sms' && (
               <div className="flex items-center justify-between text-xs mt-2 pt-2 border-t border-gray-100">
@@ -406,12 +574,24 @@ export const MessagingPage: React.FC = () => {
                   <span>
                     {smsInfo.length} chars
                   </span>
-                  <span className="px-2 py-0.5 bg-gray-100 rounded text-[10px] font-medium">
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+                    smsInfo.isUnicode ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'
+                  }`}>
                     {smsInfo.isUnicode ? 'Unicode' : 'GSM-7'}
                   </span>
                   <span className="font-medium">
                     {smsInfo.segments} segment{smsInfo.segments !== 1 ? 's' : ''}
                   </span>
+                  {smsInfo.isUnicode && (
+                    <button
+                      onClick={handleCleanText}
+                      className="ml-2 px-2 py-0.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded text-[10px] font-medium transition-colors inline-flex items-center gap-1"
+                      title="Convert to GSM-7 to reduce cost"
+                    >
+                      <Eraser className="w-3 h-3" />
+                      Clean
+                    </button>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   {smsInfo.segments > 0 && (
