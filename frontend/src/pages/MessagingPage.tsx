@@ -23,6 +23,53 @@ export const MessagingPage: React.FC = () => {
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [showSmsInfo, setShowSmsInfo] = useState(false);
 
+  // Calculate SMS segments and cost
+  const calculateSmsInfo = (text: string) => {
+    const length = text.length;
+    
+    // Detect if message contains Unicode characters (non-GSM-7)
+    // GSM-7 charset: basic ASCII + some European chars
+    const gsmChars = /^[@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&'()*+,\-.\/:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà\n\r\^{}\\[~\]|€]*$/;
+    const isUnicode = !gsmChars.test(text);
+    
+    let segments = 0;
+    let charLimit = 0;
+    let perSegmentLimit = 0;
+    
+    if (isUnicode) {
+      // Unicode: 70 chars for single, 67 for multi-part
+      charLimit = 70;
+      perSegmentLimit = 67;
+    } else {
+      // GSM-7: 160 chars for single, 153 for multi-part
+      charLimit = 160;
+      perSegmentLimit = 153;
+    }
+    
+    if (length === 0) {
+      segments = 0;
+    } else if (length <= charLimit) {
+      segments = 1;
+    } else {
+      segments = Math.ceil(length / perSegmentLimit);
+    }
+    
+    // Twilio US SMS cost: ~$0.0083 per segment
+    const costPerSegment = 0.0083;
+    const estimatedCost = segments * costPerSegment;
+    
+    return {
+      length,
+      segments,
+      isUnicode,
+      charLimit: segments <= 1 ? charLimit : perSegmentLimit,
+      estimatedCost,
+      costPerSegment
+    };
+  };
+
+  const smsInfo = calculateSmsInfo(messageContent);
+
   useEffect(() => {
     loadContacts();
   }, []);
@@ -350,9 +397,21 @@ export const MessagingPage: React.FC = () => {
                 </div>
               )}
             </div>
-            <p className="text-xs text-gray-500 mt-1">
-              {messageContent.length} characters
-            </p>
+            <div className="text-xs text-gray-600 mt-1 space-y-1">
+              <div className="flex items-center justify-between">
+                <span>
+                  {smsInfo.length} characters ({smsInfo.isUnicode ? 'Unicode' : 'GSM-7'})
+                </span>
+                <span className="font-medium">
+                  {smsInfo.segments} segment{smsInfo.segments !== 1 ? 's' : ''}
+                </span>
+              </div>
+              {smsInfo.segments > 0 && (
+                <div className="text-blue-600 font-medium">
+                  Estimated cost: ${smsInfo.estimatedCost.toFixed(4)} USD
+                </div>
+              )}
+            </div>
           </div>
 
           {/* AI Suggestions */}
