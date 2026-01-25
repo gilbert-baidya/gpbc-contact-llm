@@ -97,8 +97,8 @@ export const MessagingPage: React.FC = () => {
     cleaned = cleaned.replace(/[\u200B-\u200D\uFEFF]/g, '');
 
     // Step 4: Remove emojis and other Unicode symbols (beyond Basic Latin + GSM-7 extensions)
-    // Keep only GSM-7 compatible characters
-    const gsmCharsPattern = /[^@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&'()*+,\-.\/:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà\n\r\^{}\\[~\]|€\s]/g;
+    // Keep only GSM-7 compatible characters (including digits 0-9)
+    const gsmCharsPattern = /[^@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&'()*+,\-.\/0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà\n\r\^{}\\[~\]|€\s]/g;
     cleaned = cleaned.replace(gsmCharsPattern, '');
 
     // Step 5: Collapse multiple spaces
