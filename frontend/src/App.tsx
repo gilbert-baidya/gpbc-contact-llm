@@ -52,21 +52,6 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, logout, canSendMessages } = useAuth();
   const navigate = useNavigate();
 
-  // Lock sidebar state based on screen size
-  React.useEffect(() => {
-    const handleResize = () => {
-      if (window.innerWidth >= 1024) {
-        setSidebarOpen(true); // Always expanded on desktop
-      } else {
-        setSidebarOpen(false); // Always collapsed on mobile
-      }
-    };
-
-    handleResize(); // Set initial state
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
   // Close mobile menu on route change
   const location = useLocation();
   React.useEffect(() => {
