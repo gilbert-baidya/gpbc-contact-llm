@@ -13,8 +13,21 @@ const PASTOR_PHONES = [
 const SHEET_NAMES = {
   CONTACTS: 'FINAL_GPBC_CONTACTS',  // Use the correct sheet tab name
   SMS_REPLIES: 'SMS_Replies',
-  PRAYER_DASHBOARD: 'Prayer_Dashboard'
+  PRAYER_DASHBOARD: 'Prayer_Dashboard',
+  USERS: 'Users'  // Authentication - stores user accounts
 };
+
+// JWT Secret - Generate once and store in Script Properties
+// To set: Script Properties → Add Property → Key: JWT_SECRET, Value: (random string)
+function getJWTSecret() {
+  let secret = PropertiesService.getScriptProperties().getProperty('JWT_SECRET');
+  if (!secret) {
+    // Auto-generate secret on first run
+    secret = Utilities.getUuid() + Utilities.getUuid();
+    PropertiesService.getScriptProperties().setProperty('JWT_SECRET', secret);
+  }
+  return secret;
+}
 
 // OpenAI Configuration
 // TODO: Replace with your OpenAI API key from https://platform.openai.com/api-keys
@@ -71,6 +84,175 @@ function jsonResponse(payload) {
     .createTextOutput(JSON.stringify(payload))
     .setMimeType(ContentService.MimeType.JSON);
 }
+
+// ==================== AUTHENTICATION SYSTEM (FREE) ====================
+
+/**
+ * Hash password using SHA-256
+ */
+function hashPassword(password) {
+  const hash = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, password);
+  return hash.map(byte => ('0' + (byte & 0xFF).toString(16)).slice(-2)).join('');
+}
+
+/**
+ * Create a simple JWT-like token
+ */
+function createToken(email, role) {
+  const payload = {
+    email: email,
+    role: role,
+    exp: Date.now() + (24 * 60 * 60 * 1000) // 24 hours
+  };
+  
+  const payloadStr = JSON.stringify(payload);
+  const signature = hashPassword(payloadStr + getJWTSecret());
+  
+  return Utilities.base64Encode(payloadStr) + '.' + signature;
+}
+
+/**
+ * Verify and decode token
+ */
+function verifyToken(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 2) return null;
+    
+    const payloadStr = Utilities.newBlob(Utilities.base64Decode(parts[0])).getDataAsString();
+    const signature = parts[1];
+    
+    // Verify signature
+    const expectedSignature = hashPassword(payloadStr + getJWTSecret());
+    if (signature !== expectedSignature) return null;
+    
+    const payload = JSON.parse(payloadStr);
+    
+    // Check expiration
+    if (payload.exp < Date.now()) return null;
+    
+    return payload;
+  } catch (e) {
+    Logger.log('Token verification error: ' + e.toString());
+    return null;
+  }
+}
+
+/**
+ * Initialize Users sheet if it doesn't exist
+ */
+function initUsersSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_NAMES.USERS);
+  
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_NAMES.USERS);
+    sheet.appendRow(['Email', 'PasswordHash', 'Role', 'Name', 'CreatedAt', 'Active']);
+    sheet.getRange('A1:F1').setFontWeight('bold').setBackground('#4285f4').setFontColor('#ffffff');
+    sheet.setFrozenRows(1);
+    
+    // Create default admin account: admin@gracepraise.church / Admin123!
+    const adminEmail = 'admin@gracepraise.church';
+    const adminPassword = 'Admin123!';
+    const adminHash = hashPassword(adminPassword);
+    sheet.appendRow([adminEmail, adminHash, 'admin', 'System Administrator', new Date(), 'Yes']);
+    
+    Logger.log('Users sheet created with default admin account');
+  }
+  
+  return sheet;
+}
+
+/**
+ * Register new user
+ */
+function registerUser(email, password, name, role) {
+  const sheet = initUsersSheet();
+  const data = sheet.getDataRange().getValues();
+  
+  // Check if email already exists
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0].toLowerCase() === email.toLowerCase()) {
+      return { success: false, error: 'Email already registered' };
+    }
+  }
+  
+  // Validate password strength
+  if (password.length < 8) {
+    return { success: false, error: 'Password must be at least 8 characters' };
+  }
+  
+  // Hash password and create user
+  const passwordHash = hashPassword(password);
+  const userRole = role || 'member'; // Default to member
+  
+  sheet.appendRow([email, passwordHash, userRole, name, new Date(), 'Yes']);
+  
+  const token = createToken(email, userRole);
+  
+  return {
+    success: true,
+    token: token,
+    user: {
+      email: email,
+      name: name,
+      role: userRole
+    }
+  };
+}
+
+/**
+ * Login user
+ */
+function loginUser(email, password) {
+  const sheet = initUsersSheet();
+  const data = sheet.getDataRange().getValues();
+  
+  const passwordHash = hashPassword(password);
+  
+  // Find user
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0].toLowerCase() === email.toLowerCase() && data[i][5] === 'Yes') {
+      if (data[i][1] === passwordHash) {
+        // Password correct
+        const token = createToken(email, data[i][2]);
+        return {
+          success: true,
+          token: token,
+          user: {
+            email: data[i][0],
+            name: data[i][3],
+            role: data[i][2]
+          }
+        };
+      } else {
+        return { success: false, error: 'Invalid email or password' };
+      }
+    }
+  }
+  
+  return { success: false, error: 'Invalid email or password' };
+}
+
+/**
+ * Verify token endpoint
+ */
+function verifyUserToken(token) {
+  const payload = verifyToken(token);
+  if (!payload) {
+    return { success: false, error: 'Invalid or expired token' };
+  }
+  
+  return {
+    success: true,
+    user: {
+      email: payload.email,
+      role: payload.role
+    }
+  };
+}
+
+// ==================== END AUTHENTICATION ====================
 
 /**
  * API handler for GET requests (stats, contacts, and AI features)
@@ -347,6 +529,12 @@ function doPost(e) {
     if (action) {
       // This is an API call from the frontend
       switch (action) {
+        case 'login':
+          return handleLogin(e);
+        case 'register':
+          return handleRegister(e);
+        case 'verifyToken':
+          return handleVerifyToken(e);
         case 'sendSMS':
           return handleSendSMS(e);
         case 'makeCall':
@@ -680,6 +868,200 @@ function testWebhook() {
   const response = doPost(testEvent);
   Logger.log(response.getContent());
 }
+
+/**
+ * Quick user registration helper
+ * Run this function to add new users
+ */
+function addNewUser() {
+  // ⚠️ EDIT THESE VALUES BEFORE RUNNING ⚠️
+  const email = 'pastor@gracepraise.church';        // Change this
+  const password = 'Password123!';         // Change this
+  const name = 'Pastor Gilbert';           // Change this
+  const role = 'admin';                    // Options: 'admin', 'pastor', 'member'
+  
+  const result = registerUser(email, password, name, role);
+  
+  if (result.success) {
+    Logger.log('✅ User created successfully!');
+    Logger.log('Email: ' + result.user.email);
+    Logger.log('Name: ' + result.user.name);
+    Logger.log('Role: ' + result.user.role);
+    Logger.log('Token: ' + result.token);
+  } else {
+    Logger.log('❌ Error: ' + result.error);
+  }
+  
+  return result;
+}
+
+/**
+ * Add ministry team users
+ * Run this function to create accounts for all ministry leaders
+ */
+function addMinistryUsers() {
+  const users = [
+    {
+      email: 'pastor@gracepraise.church',
+      password: 'Pastor2026!',
+      name: 'Rev. Dr. Gilbert S. Baidya',
+      role: 'admin'
+    },
+    {
+      email: 'women@gracepraise.church',
+      password: 'Women2026!',
+      name: 'Women Ministry Leader',
+      role: 'pastor'
+    },
+    {
+      email: 'kids@gracepraise.church',
+      password: 'Kids2026!',
+      name: 'Kids Ministry Leader',
+      role: 'pastor'
+    },
+    {
+      email: 'worship@gracepraise.church',
+      password: 'Worship2026!',
+      name: 'Worship Team Leader',
+      role: 'pastor'
+    }
+  ];
+  
+  Logger.log('========================================');
+  Logger.log('Creating Ministry Team Accounts');
+  Logger.log('========================================\n');
+  
+  users.forEach(user => {
+    const result = registerUser(user.email, user.password, user.name, user.role);
+    
+    if (result.success) {
+      Logger.log('✅ SUCCESS: ' + user.name);
+      Logger.log('   Email: ' + user.email);
+      Logger.log('   Password: ' + user.password);
+      Logger.log('   Role: ' + user.role);
+      Logger.log('');
+    } else {
+      Logger.log('❌ FAILED: ' + user.name);
+      Logger.log('   Error: ' + result.error);
+      Logger.log('');
+    }
+  });
+  
+  Logger.log('========================================');
+  Logger.log('Account Creation Complete!');
+  Logger.log('========================================');
+}
+
+// ==================== AUTH API HANDLERS ====================
+
+/**
+ * Handle Login Request
+ */
+function handleLogin(e) {
+  try {
+    let email, password;
+    
+    // Parse POST data
+    if (e.postData && e.postData.contents) {
+      try {
+        const postData = JSON.parse(e.postData.contents);
+        email = postData.email;
+        password = postData.password;
+      } catch (parseError) {
+        Logger.log('Error parsing login data: ' + parseError.toString());
+      }
+    }
+    
+    // Fallback to form parameters
+    if (!email || !password) {
+      email = e.parameter.email;
+      password = e.parameter.password;
+    }
+    
+    if (!email || !password) {
+      return jsonResponse({ success: false, error: 'Email and password required' });
+    }
+    
+    return jsonResponse(loginUser(email, password));
+  } catch (error) {
+    Logger.log('Error in handleLogin: ' + error.toString());
+    return jsonResponse({ success: false, error: 'Login failed: ' + error.toString() });
+  }
+}
+
+/**
+ * Handle Register Request
+ */
+function handleRegister(e) {
+  try {
+    let email, password, name, role;
+    
+    // Parse POST data
+    if (e.postData && e.postData.contents) {
+      try {
+        const postData = JSON.parse(e.postData.contents);
+        email = postData.email;
+        password = postData.password;
+        name = postData.name;
+        role = postData.role;
+      } catch (parseError) {
+        Logger.log('Error parsing register data: ' + parseError.toString());
+      }
+    }
+    
+    // Fallback to form parameters
+    if (!email || !password || !name) {
+      email = e.parameter.email;
+      password = e.parameter.password;
+      name = e.parameter.name;
+      role = e.parameter.role;
+    }
+    
+    if (!email || !password || !name) {
+      return jsonResponse({ success: false, error: 'Email, password, and name required' });
+    }
+    
+    return jsonResponse(registerUser(email, password, name, role));
+  } catch (error) {
+    Logger.log('Error in handleRegister: ' + error.toString());
+    return jsonResponse({ success: false, error: 'Registration failed: ' + error.toString() });
+  }
+}
+
+/**
+ * Handle Token Verification
+ */
+function handleVerifyToken(e) {
+  try {
+    let token;
+    
+    // Parse POST data
+    if (e.postData && e.postData.contents) {
+      try {
+        const postData = JSON.parse(e.postData.contents);
+        token = postData.token;
+      } catch (parseError) {
+        Logger.log('Error parsing token data: ' + parseError.toString());
+      }
+    }
+    
+    // Fallback to form/query parameters
+    if (!token) {
+      token = e.parameter.token;
+    }
+    
+    if (!token) {
+      return jsonResponse({ success: false, error: 'Token required' });
+    }
+    
+    return jsonResponse(verifyUserToken(token));
+  } catch (error) {
+    Logger.log('Error in handleVerifyToken: ' + error.toString());
+    return jsonResponse({ success: false, error: 'Token verification failed: ' + error.toString() });
+  }
+}
+
+// ==================== END AUTH HANDLERS ====================
 
 /**
  * Handle Send SMS API call

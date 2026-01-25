@@ -1,94 +1,124 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
-export type UserRole = 'admin' | 'pastor' | 'user';
+// Google Apps Script URL from environment
+const GOOGLE_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SCRIPT_URL || '';
+
+export type UserRole = 'admin' | 'pastor' | 'member';
 
 export interface User {
-  id: string;
-  name: string;
   email: string;
+  name: string;
   role: UserRole;
 }
 
 interface AuthContextType {
   user: User | null;
-  login: (email: string, password: string) => Promise<boolean>;
+  token: string | null;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  register: (email: string, password: string, name: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   isAuthenticated: boolean;
   isAdmin: boolean;
   isPastor: boolean;
   canSendMessages: boolean;
+  loading: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Demo users - In production, this should be in a backend database
-const DEMO_USERS = [
-  {
-    id: '1',
-    name: 'Pastor John',
-    email: 'pastor@gpbc.org',
-    password: 'pastor123',
-    role: 'pastor' as UserRole
-  },
-  {
-    id: '2',
-    name: 'Admin Sarah',
-    email: 'admin@gpbc.org',
-    password: 'admin123',
-    role: 'admin' as UserRole
-  },
-  {
-    id: '3',
-    name: 'Member Tom',
-    email: 'member@gpbc.org',
-    password: 'member123',
-    role: 'user' as UserRole
-  }
-];
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Load user from localStorage on mount
+  // Load user and token from localStorage on mount
   useEffect(() => {
-    const storedUser = localStorage.getItem('churchUser');
-    if (storedUser) {
+    const storedToken = localStorage.getItem('authToken');
+    const storedUser = localStorage.getItem('authUser');
+    
+    if (storedToken && storedUser) {
       try {
+        setToken(storedToken);
         setUser(JSON.parse(storedUser));
       } catch (error) {
-        console.error('Failed to parse stored user:', error);
-        localStorage.removeItem('churchUser');
+        console.error('Failed to parse stored auth data:', error);
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('authUser');
       }
     }
+    setLoading(false);
   }, []);
 
-  const login = async (email: string, password: string): Promise<boolean> => {
-    // In production, this would be an API call to your backend
-    const foundUser = DEMO_USERS.find(
-      u => u.email.toLowerCase() === email.toLowerCase() && u.password === password
-    );
+  const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const response = await fetch(`${GOOGLE_SCRIPT_URL}?action=login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          email,
+          password
+        })
+      });
 
-    if (foundUser) {
-      const userData: User = {
-        id: foundUser.id,
-        name: foundUser.name,
-        email: foundUser.email,
-        role: foundUser.role
-      };
-      setUser(userData);
-      localStorage.setItem('churchUser', JSON.stringify(userData));
-      return true;
+      const data = await response.json();
+
+      if (data.success && data.token && data.user) {
+        setToken(data.token);
+        setUser(data.user);
+        localStorage.setItem('authToken', data.token);
+        localStorage.setItem('authUser', JSON.stringify(data.user));
+        return { success: true };
+      } else {
+        return { success: false, error: data.error || 'Login failed' };
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      return { success: false, error: 'Network error. Please try again.' };
     }
+  };
 
-    return false;
+  const register = async (email: string, password: string, name: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const response = await fetch(`${GOOGLE_SCRIPT_URL}?action=register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          email,
+          password,
+          name,
+          role: 'member' // Default role
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success && data.token && data.user) {
+        setToken(data.token);
+        setUser(data.user);
+        localStorage.setItem('authToken', data.token);
+        localStorage.setItem('authUser', JSON.stringify(data.user));
+        return { success: true };
+      } else {
+        return { success: false, error: data.error || 'Registration failed' };
+      }
+    } catch (error) {
+      console.error('Registration error:', error);
+      return { success: false, error: 'Network error. Please try again.' };
+    }
   };
 
   const logout = () => {
     setUser(null);
-    localStorage.removeItem('churchUser');
+    setToken(null);
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('authUser');
   };
 
-  const isAuthenticated = !!user;
+  const isAuthenticated = !!user && !!token;
   const isAdmin = user?.role === 'admin';
   const isPastor = user?.role === 'pastor';
   const canSendMessages = isAdmin || isPastor;
@@ -97,12 +127,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthContext.Provider
       value={{
         user,
+        token,
         login,
+        register,
         logout,
         isAuthenticated,
         isAdmin,
         isPastor,
-        canSendMessages
+        canSendMessages,
+        loading
       }}
     >
       {children}

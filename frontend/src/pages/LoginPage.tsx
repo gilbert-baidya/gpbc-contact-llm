@@ -27,13 +27,13 @@ export const LoginPage: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const success = await login(email, password);
+      const result = await login(email, password);
       
-      if (success) {
+      if (result.success) {
         toast.success('Welcome back!');
         navigate(from, { replace: true });
       } else {
-        toast.error('Invalid email or password');
+        toast.error(result.error || 'Invalid email or password');
       }
     } catch (error) {
       toast.error('Login failed. Please try again.');
@@ -120,6 +120,18 @@ export const LoginPage: React.FC = () => {
               )}
             </button>
           </form>
+
+          {/* Login Hints */}
+          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <p className="text-xs font-semibold text-blue-900 mb-2">🔑 Default Admin Login:</p>
+            <div className="space-y-1 text-xs text-blue-700">
+              <p>Email: <code className="bg-blue-100 px-2 py-0.5 rounded">admin@gpbc.org</code></p>
+              <p>Password: <code className="bg-blue-100 px-2 py-0.5 rounded">Admin123!</code></p>
+            </div>
+            <p className="mt-2 text-[10px] text-blue-600 italic">
+              * Change default password after first login
+            </p>
+          </div>
         </div>
       </div>
     </div>
