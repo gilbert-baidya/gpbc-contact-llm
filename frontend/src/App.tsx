@@ -48,7 +48,6 @@ const NavLink: React.FC<{
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Lock sidebar open on desktop (>= 1024px), closed on mobile
-  const [sidebarOpen, setSidebarOpen] = React.useState(() => window.innerWidth >= 1024);
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
   const { user, logout, canSendMessages } = useAuth();
   const navigate = useNavigate();
