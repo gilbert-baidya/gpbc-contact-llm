@@ -73,6 +73,9 @@ export interface MakeCallResponse {
  * Build URL without authentication (API key removed)
  */
 function buildURL(action: string): string {
+  if (!GOOGLE_SCRIPT_URL) {
+    throw new Error('Google Apps Script URL is not configured. Please set VITE_GOOGLE_SCRIPT_URL in environment variables.');
+  }
   return `${GOOGLE_SCRIPT_URL}?action=${action}`;
 }
 
