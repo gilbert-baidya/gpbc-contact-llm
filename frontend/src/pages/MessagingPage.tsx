@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { MessageSquare, Send, Phone, Loader, UserPlus, X } from 'lucide-react';
+import { MessageSquare, Send, Phone, Loader, UserPlus, X, Sparkles, Wand2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fetchContacts, bulkSendSMS, bulkMakeCall, Contact } from '../services/googleAppsScriptService';
+import { llmApi, getBackendInfo } from '../api/llmBackend';
 
 export const MessagingPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -17,6 +18,9 @@ export const MessagingPage: React.FC = () => {
   const [progress, setProgress] = useState({ sent: 0, total: 0 });
   const [showContactModal, setShowContactModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [useAIPersonalization, setUseAIPersonalization] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
   useEffect(() => {
     loadContacts();
@@ -73,14 +77,63 @@ export const MessagingPage: React.FC = () => {
     setProgress({ sent: 0, total: targets.length });
 
     try {
-      const onProgress = (sent: number) => {
-        setProgress({ sent, total: targets.length });
-      };
-
       if (messageType === 'sms') {
-        await bulkSendSMS(targets, messageContent, onProgress);
-        toast.success(`SMS sent to ${targets.length} contact(s)`);
+        // If AI personalization is enabled, personalize each message
+        if (useAIPersonalization) {
+          toast.loading('✨ Personalizing messages...', { id: 'personalizing' });
+          let sent = 0;
+          
+          for (const contact of targets) {
+            try {
+              // Simple personalization - always add name at the start
+              let personalizedMsg = messageContent;
+              
+              // Check if name is already in the message
+              const lowerMsg = messageContent.toLowerCase();
+              const contactFirstName = contact.name.split(' ')[0]; // Get first name only
+              const hasName = lowerMsg.includes(contactFirstName.toLowerCase());
+              
+              if (!hasName) {
+                // Add name at the beginning
+                if (lowerMsg.startsWith('hi') || lowerMsg.startsWith('hello')) {
+                  // Replace "Hi" with "Hi [Name]"
+                  personalizedMsg = messageContent.replace(/^(hi|hello)\s*/i, `$1 ${contactFirstName}, `);
+                } else {
+                  // Just prepend name
+                  personalizedMsg = `${contactFirstName}, ${messageContent}`;
+                }
+              }
+
+              console.log(`Personalizing for ${contact.name}: "${messageContent}" → "${personalizedMsg}"`);
+
+              // Send personalized message
+              await bulkSendSMS([contact], personalizedMsg);
+              sent++;
+              setProgress({ sent, total: targets.length });
+              
+              // Small delay to avoid rate limits
+              await new Promise(resolve => setTimeout(resolve, 500));
+            } catch (error) {
+              console.error(`Failed to personalize for ${contact.name}:`, error);
+              // Fallback to original message
+              await bulkSendSMS([contact], messageContent);
+              sent++;
+              setProgress({ sent, total: targets.length });
+            }
+          }
+          toast.success(`✨ ${sent} personalized messages sent!`, { id: 'personalizing' });
+        } else {
+          // Send same message to everyone
+          const onProgress = (sent: number) => {
+            setProgress({ sent, total: targets.length });
+          };
+          await bulkSendSMS(targets, messageContent, onProgress);
+          toast.success(`SMS sent to ${targets.length} contact(s)`);
+        }
       } else {
+        const onProgress = (sent: number) => {
+          setProgress({ sent, total: targets.length });
+        };
         await bulkMakeCall(targets, messageContent, onProgress);
         toast.success(`Calls initiated to ${targets.length} contact(s)`);
       }
@@ -88,6 +141,7 @@ export const MessagingPage: React.FC = () => {
       setMessageContent('');
       setSelectedContacts([]);
       setSendToAll(false);
+      setUseAIPersonalization(false);
     } catch (error: any) {
       toast.error(error.message || 'Failed to send messages');
     } finally {
@@ -123,6 +177,32 @@ export const MessagingPage: React.FC = () => {
 
   const removeContact = (contactId: number) => {
     setSelectedContacts(selectedContacts.filter(c => c.id !== contactId));
+  };
+
+  const getAISuggestions = async () => {
+    if (!messageContent.trim()) {
+      toast.error('Enter a message first to get AI suggestions');
+      return;
+    }
+
+    setLoadingSuggestions(true);
+    try {
+      const suggestions = await llmApi.getReplySuggestions(messageContent);
+      setAiSuggestions(suggestions);
+      
+      // Show backend info in console
+      const backendInfo = getBackendInfo();
+      console.log('AI Suggestions from:', backendInfo.type);
+      
+      toast.success(`✨ AI suggestions generated (${backendInfo.type})`);
+    } catch (error) {
+      console.error('Failed to get AI suggestions:', error);
+      const backendInfo = getBackendInfo();
+      toast.error(`Failed to generate suggestions. Check ${backendInfo.type} connection.`);
+      setAiSuggestions([]);
+    } finally {
+      setLoadingSuggestions(false);
+    }
   };
 
   return (
@@ -173,9 +253,29 @@ export const MessagingPage: React.FC = () => {
 
           {/* Message Content */}
           <div className="mb-3 sm:mb-4">
-            <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2">
-              Message
-            </label>
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-xs sm:text-sm font-medium text-gray-700">
+                Message
+              </label>
+              <button
+                type="button"
+                onClick={getAISuggestions}
+                disabled={loadingSuggestions || !messageContent.trim()}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loadingSuggestions ? (
+                  <>
+                    <Loader className="w-3.5 h-3.5 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-3.5 h-3.5" />
+                    AI Improve
+                  </>
+                )}
+              </button>
+            </div>
             <textarea
               value={messageContent}
               onChange={(e) => setMessageContent(e.target.value)}
@@ -186,6 +286,27 @@ export const MessagingPage: React.FC = () => {
               {messageContent.length} characters
             </p>
           </div>
+
+          {/* AI Suggestions */}
+          {aiSuggestions.length > 0 && (
+            <div className="mb-3 sm:mb-4 p-3 bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <Wand2 className="w-4 h-4 text-purple-600" />
+                <h3 className="text-sm font-semibold text-purple-900">AI Suggestions</h3>
+              </div>
+              <div className="space-y-2">
+                {aiSuggestions.map((suggestion, index) => (
+                  <button
+                    key={index}
+                    onClick={() => setMessageContent(suggestion)}
+                    className="w-full text-left p-2.5 bg-white hover:bg-purple-50 border border-purple-200 rounded text-xs sm:text-sm text-gray-700 hover:text-purple-900 transition-colors"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Templates - Scrollable on mobile */}
           <div className="mb-3 sm:mb-4">
@@ -241,6 +362,29 @@ export const MessagingPage: React.FC = () => {
                 )}
               </div>
             )}
+          </div>
+
+          {/* AI Personalization Toggle */}
+          <div className="mb-4 p-3 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-lg">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useAIPersonalization}
+                onChange={(e) => setUseAIPersonalization(e.target.checked)}
+                className="mt-1 rounded"
+              />
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <Sparkles className="w-4 h-4 text-purple-600" />
+                  <span className="text-sm font-semibold text-gray-900">Smart Personalization</span>
+                </div>
+                <p className="text-xs text-gray-600 leading-relaxed">
+                  Automatically adds each recipient's name to the message. 
+                  Makes bulk messages feel personal and increases engagement.
+                  <span className="text-purple-700 font-medium"> (No API needed - instant!)</span>
+                </p>
+              </div>
+            </label>
           </div>
 
           {/* Send Button - Sticky on mobile */}

@@ -1,14 +1,15 @@
-from openai import OpenAI
+from openai import AsyncOpenAI
 from config import settings
 from typing import List, Dict
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
 
 class LLMService:
     def __init__(self):
-        self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = settings.OPENAI_MODEL
         
         self.system_prompt = """You are a friendly and helpful AI assistant for a church community.
@@ -28,7 +29,7 @@ Church Information:
 
 Keep responses concise and natural for voice conversation. If you don't know something, offer to take a message or suggest calling back."""
     
-    def get_response(self, user_message: str, conversation_history: List[Dict] = None) -> str:
+    async def get_response(self, user_message: str, conversation_history: List[Dict] = None) -> str:
         """Get response from LLM for user message"""
         try:
             messages = [{"role": "system", "content": self.system_prompt}]
@@ -38,7 +39,7 @@ Keep responses concise and natural for voice conversation. If you don't know som
             
             messages.append({"role": "user", "content": user_message})
             
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=0.7,
@@ -51,10 +52,10 @@ Keep responses concise and natural for voice conversation. If you don't know som
             logger.error(f"LLM error: {str(e)}")
             return "I apologize, but I'm having trouble processing your request. Could you please try again?"
     
-    def detect_language(self, text: str) -> str:
+    async def detect_language(self, text: str) -> str:
         """Detect the language of the text"""
         try:
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {
@@ -73,7 +74,7 @@ Keep responses concise and natural for voice conversation. If you don't know som
             logger.error(f"Language detection error: {str(e)}")
             return "en"  # Default to English
     
-    def summarize_conversation(self, conversation_history: List[Dict]) -> str:
+    async def summarize_conversation(self, conversation_history: List[Dict]) -> str:
         """Create a summary of the conversation"""
         try:
             messages = [
@@ -90,7 +91,7 @@ Keep responses concise and natural for voice conversation. If you don't know som
             
             messages.append({"role": "user", "content": conversation_text})
             
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=messages,
                 temperature=0.5,

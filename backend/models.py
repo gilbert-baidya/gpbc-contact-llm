@@ -91,6 +91,19 @@ class ScheduledReminder(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 
+class Conversation(Base):
+    __tablename__ = "conversations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False)
+    direction = Column(String, nullable=False)  # inbound or outbound
+    message = Column(Text, nullable=False)
+    intent = Column(String, nullable=True)  # prayer_request, question, greeting, etc.
+    language = Column(String, nullable=True)
+    needs_pastoral_care = Column(Boolean, default=False)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class ConversationHistory(Base):
     __tablename__ = "conversation_history"
     

@@ -9,7 +9,7 @@ import logging
 
 from config import settings
 from database import engine, get_db, Base
-from models import Contact, Message, CallLog, ScheduledReminder, MessageStatus, ConversationHistory
+from models import Contact, Message, CallLog, ScheduledReminder, MessageStatus, ConversationHistory, Conversation
 from schemas import (
     ContactCreate, ContactResponse, ContactUpdate,
     MessageCreate, MessageResponse,
@@ -35,6 +35,22 @@ except ImportError as e:
     AUTH_AVAILABLE = False
     logger.warning(f"Authentication module not available: {e}")
 
+# Import LLM routes
+try:
+    from routes.llm_routes import router as llm_router
+    LLM_ROUTES_AVAILABLE = True
+except ImportError as e:
+    LLM_ROUTES_AVAILABLE = False
+    logger.warning(f"LLM routes not available: {e}")
+
+# Import webhook routes
+try:
+    from routes.webhook_routes import router as webhook_router
+    WEBHOOK_ROUTES_AVAILABLE = True
+except ImportError as e:
+    WEBHOOK_ROUTES_AVAILABLE = False
+    logger.warning(f"Webhook routes not available: {e}")
+
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
@@ -58,6 +74,16 @@ app.add_middleware(
 if AUTH_AVAILABLE:
     app.include_router(auth_router)
     logger.info("✅ Authentication system enabled")
+
+# Include LLM routes if available
+if LLM_ROUTES_AVAILABLE:
+    app.include_router(llm_router)
+    logger.info("✅ LLM intelligence routes enabled")
+
+# Include webhook routes if available
+if WEBHOOK_ROUTES_AVAILABLE:
+    app.include_router(webhook_router)
+    logger.info("✅ Twilio webhook routes enabled")
 
 
 # ==================== Health Check ====================
@@ -266,8 +292,8 @@ async def import_contacts(file: UploadFile = File(...), db: Session = Depends(ge
 # ==================== Messaging ====================
 
 @app.post("/api/messages/send", response_model=dict)
-def send_message(message: MessageCreate, db: Session = Depends(get_db)):
-    """Send message to contacts"""
+async def send_message(message: MessageCreate, db: Session = Depends(get_db)):
+    """Send message to contacts with optional LLM personalization"""
     try:
         sent_results = []
         
@@ -277,13 +303,40 @@ def send_message(message: MessageCreate, db: Session = Depends(get_db)):
             for contact_data in message.phone_numbers:
                 phone = contact_data.get('phone')
                 name = contact_data.get('name', 'Unknown')
+                language = contact_data.get('language', 'english')
                 
                 if not phone:
                     continue
                 
+                # Personalize message with LLM if available
+                final_content = message.content
+                if LLM_ROUTES_AVAILABLE and hasattr(message, 'use_llm_personalization') and message.use_llm_personalization:
+                    try:
+                        personalization_prompt = f"""Personalize this message for {name}.
+
+Template: {message.content}
+
+Contact details:
+- Name: {name}
+- Language: {language}
+
+Instructions:
+1. Replace generic greetings with their name
+2. Keep it natural and warm
+3. Keep the core message the same
+4. Keep it concise (under 160 characters for SMS)
+
+Return only the personalized message, no explanations.
+"""
+                        final_content = await llm_service.get_response(personalization_prompt)
+                        logger.info(f"Personalized message for {name}: {final_content}")
+                    except Exception as llm_error:
+                        logger.warning(f"LLM personalization failed, using original: {llm_error}")
+                        final_content = message.content
+                
                 # Send SMS directly without storing in DB
                 if message.message_type.value == "sms":
-                    result = twilio_service.send_sms(phone, message.content)
+                    result = twilio_service.send_sms(phone, final_content)
                     sent_results.append({
                         "name": name,
                         "phone": phone,
@@ -291,9 +344,24 @@ def send_message(message: MessageCreate, db: Session = Depends(get_db)):
                         "sid": result.get("sid"),
                         "error": result.get("error")
                     })
+                    
+                    # Store in conversation history if successful
+                    if result.get("success"):
+                        # Try to find or create contact
+                        contact = db.query(Contact).filter(Contact.phone == phone).first()
+                        if contact:
+                            from models import Conversation
+                            conv = Conversation(
+                                contact_id=contact.id,
+                                direction="outbound",
+                                message=final_content,
+                                language=language
+                            )
+                            db.add(conv)
+                    
                     logger.info(f"SMS to {name} ({phone}): {result}")
                 else:
-                    result = twilio_service.make_call(phone, message.content)
+                    result = twilio_service.make_call(phone, final_content)
                     sent_results.append({
                         "name": name,
                         "phone": phone,
@@ -302,6 +370,8 @@ def send_message(message: MessageCreate, db: Session = Depends(get_db)):
                         "error": result.get("error")
                     })
                     logger.info(f"Call to {name} ({phone}): {result}")
+            
+            db.commit()
             
             successful = sum(1 for r in sent_results if r.get("success"))
             failed = len(sent_results) - successful

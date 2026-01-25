@@ -1,6 +1,7 @@
 /**
  * Grace and Praise Bangladeshi Church - Twilio SMS Webhook
  * Enhanced with Pastor Alerts and Prayer Dashboard
+ * AI Features powered by OpenAI
  */
 
 // CONFIGURATION
@@ -15,6 +16,52 @@ const SHEET_NAMES = {
   PRAYER_DASHBOARD: 'Prayer_Dashboard'
 };
 
+// OpenAI Configuration
+// TODO: Replace with your OpenAI API key from https://platform.openai.com/api-keys
+const OPENAI_API_KEY = 'YOUR_OPENAI_API_KEY_HERE';
+
+/**
+ * Call OpenAI API for AI features
+ */
+function callOpenAI(message, systemPrompt, maxTokens) {
+  const url = 'https://api.openai.com/v1/chat/completions';
+  
+  const payload = {
+    model: 'gpt-3.5-turbo',
+    messages: [
+      { role: 'system', content: systemPrompt || 'You are a helpful church assistant.' },
+      { role: 'user', content: message }
+    ],
+    temperature: 0.7,
+    max_tokens: maxTokens || 200
+  };
+  
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      'Authorization': 'Bearer ' + OPENAI_API_KEY
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+  
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    const data = JSON.parse(response.getContentText());
+    
+    if (data.error) {
+      Logger.log('OpenAI Error: ' + JSON.stringify(data.error));
+      return null;
+    }
+    
+    return data.choices[0].message.content;
+  } catch (e) {
+    Logger.log('OpenAI Exception: ' + e.toString());
+    return null;
+  }
+}
+
 /**
  * Standard JSON response
  * Note: Google Apps Script automatically handles CORS for "Anyone" access
@@ -26,7 +73,7 @@ function jsonResponse(payload) {
 }
 
 /**
- * API handler for GET requests (stats and contacts)
+ * API handler for GET requests (stats, contacts, and AI features)
  * Public API - no authentication required for reading data
  */
 function doGet(e) {
@@ -41,6 +88,12 @@ function doGet(e) {
         return getContacts();
       case 'getMessageHistory':
         return getMessageHistory();
+      case 'personalizeMessage':
+        return personalizeMessage(e.parameter);
+      case 'improveMessage':
+        return improveMessage(e.parameter);
+      case 'translateMessage':
+        return translateMessage(e.parameter);
       default:
         return jsonResponse({ error: 'Invalid action' });
     }
@@ -149,6 +202,137 @@ function getContacts() {
     }));
   
   return jsonResponse(contacts);
+}
+
+/**
+ * AI Feature: Personalize message with contact name
+ */
+function personalizeMessage(params) {
+  const message = params.message;
+  const name = params.name;
+  
+  if (!message || !name) {
+    return jsonResponse({ 
+      error: 'Missing required parameters: message and name',
+      success: false 
+    });
+  }
+  
+  // Extract first name
+  const firstName = name.split(' ')[0];
+  
+  // Check if name already in message
+  if (message.toLowerCase().includes(firstName.toLowerCase())) {
+    return jsonResponse({ 
+      success: true, 
+      personalized: message 
+    });
+  }
+  
+  // Use AI to naturally add name
+  const prompt = `Add the name "${firstName}" naturally to this message: "${message}". Keep it under 160 characters and maintain a warm, pastoral tone.`;
+  const systemPrompt = 'You are a church communication assistant. Add names naturally to messages. Return only the personalized message, nothing else.';
+  
+  const aiResult = callOpenAI(prompt, systemPrompt, 100);
+  
+  // Fallback to simple prepend if AI fails
+  const personalized = aiResult || `${firstName}, ${message}`;
+  
+  return jsonResponse({ 
+    success: true, 
+    personalized: personalized 
+  });
+}
+
+/**
+ * AI Feature: Improve message with suggestions
+ */
+function improveMessage(params) {
+  const message = params.message;
+  
+  if (!message) {
+    return jsonResponse({ 
+      error: 'Missing required parameter: message',
+      success: false 
+    });
+  }
+  
+  const prompt = `Improve this church message: "${message}". Provide exactly 3 different improved variations. Each must be under 160 characters. Keep the pastoral tone warm and welcoming. Format as a numbered list.`;
+  const systemPrompt = 'You are a church communication expert. Improve messages to be more engaging while keeping them concise and appropriate for SMS.';
+  
+  const aiResult = callOpenAI(prompt, systemPrompt, 300);
+  
+  if (!aiResult) {
+    return jsonResponse({ 
+      success: false, 
+      error: 'Failed to generate suggestions',
+      suggestions: [] 
+    });
+  }
+  
+  // Parse suggestions from AI response (expects numbered list)
+  const suggestions = aiResult
+    .split('\n')
+    .filter(line => line.trim().match(/^\d+[.)]/))
+    .map(line => line.replace(/^\d+[.)]/, '').trim())
+    .filter(s => s.length > 0)
+    .slice(0, 3);
+  
+  // Fallback if parsing fails
+  if (suggestions.length === 0) {
+    suggestions.push(message + ' 🙏');
+    suggestions.push('Join us! ' + message);
+    suggestions.push(message + ' God bless you!');
+  }
+  
+  return jsonResponse({ 
+    success: true, 
+    suggestions: suggestions 
+  });
+}
+
+/**
+ * AI Feature: Translate message to different language
+ */
+function translateMessage(params) {
+  const text = params.text;
+  const language = params.language || 'bn'; // Default to Bengali
+  
+  if (!text) {
+    return jsonResponse({ 
+      error: 'Missing required parameter: text',
+      success: false 
+    });
+  }
+  
+  // Language mapping
+  const languageNames = {
+    'en': 'English',
+    'bn': 'Bengali',
+    'hi': 'Hindi',
+    'es': 'Spanish'
+  };
+  
+  const targetLanguage = languageNames[language] || language;
+  
+  const prompt = `Translate this church message to ${targetLanguage}: "${text}". Keep the pastoral tone and warmth. Keep it under 160 characters if possible.`;
+  const systemPrompt = 'You are a multilingual church communication translator. Translate messages while preserving their spiritual and pastoral tone.';
+  
+  const translated = callOpenAI(prompt, systemPrompt, 200);
+  
+  if (!translated) {
+    return jsonResponse({ 
+      success: false, 
+      error: 'Translation failed',
+      translated: text 
+    });
+  }
+  
+  return jsonResponse({ 
+    success: true, 
+    translated: translated,
+    language: language 
+  });
 }
 
 /**
