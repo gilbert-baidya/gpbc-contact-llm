@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { MessageSquare, Send, Phone, Loader, UserPlus, X, Sparkles, Wand2 } from 'lucide-react';
+import { MessageSquare, Send, Phone, Loader, UserPlus, X, Sparkles, Wand2, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fetchContacts, bulkSendSMS, bulkMakeCall, Contact } from '../services/googleAppsScriptService';
 import { llmApi, getBackendInfo } from '../api/llmBackend';
@@ -21,6 +21,7 @@ export const MessagingPage: React.FC = () => {
   const [useAIPersonalization, setUseAIPersonalization] = useState(false);
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [showSmsInfo, setShowSmsInfo] = useState(false);
 
   useEffect(() => {
     loadContacts();
@@ -276,12 +277,79 @@ export const MessagingPage: React.FC = () => {
                 )}
               </button>
             </div>
-            <textarea
-              value={messageContent}
-              onChange={(e) => setMessageContent(e.target.value)}
-              className="input min-h-[120px] sm:min-h-[140px] lg:min-h-[150px] text-sm"
-              placeholder={messageType === 'sms' ? 'Type your message...' : 'This message will be read aloud...'}
-            />
+            <div className="relative">
+              <textarea
+                value={messageContent}
+                onChange={(e) => setMessageContent(e.target.value)}
+                className="input min-h-[120px] sm:min-h-[140px] lg:min-h-[150px] text-sm"
+                placeholder={messageType === 'sms' ? 'Type your message...' : 'This message will be read aloud...'}
+              />
+              
+              {/* SMS Cost Info Icon */}
+              {messageType === 'sms' && (
+                <div className="absolute bottom-2 right-2">
+                  <div className="relative group">
+                    <button
+                      type="button"
+                      onMouseEnter={() => setShowSmsInfo(true)}
+                      onMouseLeave={() => setShowSmsInfo(false)}
+                      onClick={() => setShowSmsInfo(!showSmsInfo)}
+                      className="p-1 text-gray-400 hover:text-blue-500 transition-colors"
+                    >
+                      <Info className="w-4 h-4" />
+                    </button>
+                    
+                    {/* Tooltip */}
+                    {showSmsInfo && (
+                      <div className="absolute bottom-full right-0 mb-2 w-80 p-4 bg-white border border-gray-200 rounded-lg shadow-lg z-50 text-left">
+                        <div className="space-y-3">
+                          <h4 className="font-semibold text-sm text-gray-900 border-b pb-2">
+                            📱 SMS Cost & Character Guide
+                          </h4>
+                          
+                          <div className="space-y-2 text-xs text-gray-700">
+                            <div>
+                              <p className="font-medium text-gray-800 mb-1">English SMS:</p>
+                              <ul className="list-disc list-inside space-y-0.5 ml-2">
+                                <li>160 characters = 1 segment (~$0.0083/segment)</li>
+                                <li>Long SMS: 153 chars per segment when split</li>
+                              </ul>
+                            </div>
+                            
+                            <div>
+                              <p className="font-medium text-gray-800 mb-1">Bangla / Emoji / Unicode SMS:</p>
+                              <ul className="list-disc list-inside space-y-0.5 ml-2">
+                                <li>70 characters = 1 segment (~$0.0083/segment)</li>
+                                <li>Long SMS: 67 chars per segment when split</li>
+                              </ul>
+                            </div>
+                            
+                            <div className="pt-2 border-t">
+                              <p className="font-medium text-gray-800 mb-1">💡 Examples:</p>
+                              <ul className="list-disc list-inside space-y-0.5 ml-2">
+                                <li>150 English chars = $0.0083</li>
+                                <li>300 English chars = $0.0166</li>
+                                <li>60 Bangla chars = $0.0083</li>
+                                <li>120 Bangla chars = $0.0166</li>
+                              </ul>
+                            </div>
+                            
+                            <div className="pt-2 border-t text-gray-600">
+                              <p className="mb-1">📞 Monthly costs:</p>
+                              <ul className="list-disc list-inside space-y-0.5 ml-2">
+                                <li>Local number: ~$1.15/month</li>
+                                <li>Toll-free: ~$2.15/month</li>
+                              </ul>
+                              <p className="mt-2 text-[10px] italic">* Carrier fees may apply. Each segment billed separately.</p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             <p className="text-xs text-gray-500 mt-1">
               {messageContent.length} characters
             </p>
