@@ -332,23 +332,24 @@ export const MessagingPage: React.FC = () => {
                 placeholder={messageType === 'sms' ? 'Type your message...' : 'This message will be read aloud...'}
               />
               
-              {/* SMS Cost Info Icon */}
+              {/* SMS Cost Info Icon - Right Side */}
               {messageType === 'sms' && (
-                <div className="absolute bottom-2 right-2">
+                <div className="absolute right-2 top-1/2 -translate-y-1/2">
                   <div className="relative group">
                     <button
                       type="button"
                       onMouseEnter={() => setShowSmsInfo(true)}
                       onMouseLeave={() => setShowSmsInfo(false)}
                       onClick={() => setShowSmsInfo(!showSmsInfo)}
-                      className="p-1 text-gray-400 hover:text-blue-500 transition-colors"
+                      className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-full transition-all"
+                      aria-label="SMS cost information"
                     >
                       <Info className="w-4 h-4" />
                     </button>
                     
                     {/* Tooltip */}
                     {showSmsInfo && (
-                      <div className="absolute bottom-full right-0 mb-2 w-80 p-4 bg-white border border-gray-200 rounded-lg shadow-lg z-50 text-left">
+                      <div className="absolute top-0 right-full mr-2 w-80 p-4 bg-white border border-gray-200 rounded-lg shadow-lg z-50 text-left">
                         <div className="space-y-3">
                           <h4 className="font-semibold text-sm text-gray-900 border-b pb-2">
                             📱 SMS Cost & Character Guide
@@ -397,21 +398,30 @@ export const MessagingPage: React.FC = () => {
                 </div>
               )}
             </div>
-            <div className="text-xs text-gray-600 mt-1 space-y-1">
-              <div className="flex items-center justify-between">
-                <span>
-                  {smsInfo.length} characters ({smsInfo.isUnicode ? 'Unicode' : 'GSM-7'})
-                </span>
-                <span className="font-medium">
-                  {smsInfo.segments} segment{smsInfo.segments !== 1 ? 's' : ''}
-                </span>
-              </div>
-              {smsInfo.segments > 0 && (
-                <div className="text-blue-600 font-medium">
-                  Estimated cost: ${smsInfo.estimatedCost.toFixed(4)} USD
+            
+            {/* SMS Stats Display */}
+            {messageType === 'sms' && (
+              <div className="flex items-center justify-between text-xs mt-2 pt-2 border-t border-gray-100">
+                <div className="flex items-center gap-3 text-gray-600">
+                  <span>
+                    {smsInfo.length} chars
+                  </span>
+                  <span className="px-2 py-0.5 bg-gray-100 rounded text-[10px] font-medium">
+                    {smsInfo.isUnicode ? 'Unicode' : 'GSM-7'}
+                  </span>
+                  <span className="font-medium">
+                    {smsInfo.segments} segment{smsInfo.segments !== 1 ? 's' : ''}
+                  </span>
                 </div>
-              )}
-            </div>
+                <div className="flex items-center gap-2">
+                  {smsInfo.segments > 0 && (
+                    <span className="text-blue-600 font-semibold">
+                      ${smsInfo.estimatedCost.toFixed(4)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* AI Suggestions */}
