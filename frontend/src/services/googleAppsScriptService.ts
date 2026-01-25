@@ -8,16 +8,16 @@
 const GOOGLE_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SCRIPT_URL || '';
 const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || '';
 
-if (!GOOGLE_SCRIPT_URL) {
-  console.error('⚠️ VITE_GOOGLE_SCRIPT_URL is not set!');
-}
-
-if (!GOOGLE_API_KEY) {
-  console.error('⚠️ VITE_GOOGLE_API_KEY is not set!');
-}
-
+// Debug logging
+console.log('🌍 Environment:', import.meta.env.MODE);
+console.log('📦 All env vars:', Object.keys(import.meta.env));
 console.log('🔗 Google Script URL:', GOOGLE_SCRIPT_URL);
 console.log('🔑 API Key configured:', !!GOOGLE_API_KEY);
+
+if (!GOOGLE_SCRIPT_URL) {
+  console.error('⚠️ VITE_GOOGLE_SCRIPT_URL is not set!');
+  console.error('Available env vars:', import.meta.env);
+}
 
 export interface Contact {
   id: number;
