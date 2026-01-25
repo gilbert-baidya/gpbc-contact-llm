@@ -151,8 +151,8 @@ export const MessagingPage: React.FC = () => {
     const length = text.length;
     
     // Detect if message contains Unicode characters (non-GSM-7)
-    // GSM-7 charset: basic ASCII + some European chars
-    const gsmChars = /^[@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&'()*+,\-.\/:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà\n\r\^{}\\[~\]|€]*$/;
+    // GSM-7 charset: basic ASCII + some European chars + digits 0-9
+    const gsmChars = /^[@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&'()*+,\-.\/0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà\n\r\^{}\\[~\]|€]*$/;
     const isUnicode = !gsmChars.test(text);
     
     let segments = 0;
