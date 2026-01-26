@@ -1,0 +1,17 @@
+{
+  "name": "GPBC Contact System",
+  "short_name": "GPBC Contact",
+  "description": "Grace and Praise Bangladeshi Church Contact Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4F46E5",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

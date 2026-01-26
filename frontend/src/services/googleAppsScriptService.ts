@@ -70,13 +70,16 @@ export interface MakeCallResponse {
 }
 
 /**
- * Build URL without authentication (API key removed)
+ * Build URL with API key authentication
  */
 function buildURL(action: string): string {
   if (!GOOGLE_SCRIPT_URL) {
     throw new Error('Google Apps Script URL is not configured. Please set VITE_GOOGLE_SCRIPT_URL in environment variables.');
   }
-  return `${GOOGLE_SCRIPT_URL}?action=${action}`;
+  if (!GOOGLE_API_KEY) {
+    throw new Error('Google API Key is not configured. Please set VITE_GOOGLE_API_KEY in environment variables.');
+  }
+  return `${GOOGLE_SCRIPT_URL}?action=${action}&key=${GOOGLE_API_KEY}`;
 }
 
 /**

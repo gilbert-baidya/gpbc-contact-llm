@@ -14,7 +14,9 @@ const SHEET_NAMES = {
   CONTACTS: 'FINAL_GPBC_CONTACTS',  // Use the correct sheet tab name
   SMS_REPLIES: 'SMS_Replies',
   PRAYER_DASHBOARD: 'Prayer_Dashboard',
-  USERS: 'Users'  // Authentication - stores user accounts
+  USERS: 'Users',  // Authentication - stores user accounts
+  AUDIT_LOG: 'Audit_Log',  // Security audit trail
+  RATE_LIMITS: 'Rate_Limits'  // Track API usage
 };
 
 // JWT Secret - Generate once and store in Script Properties
@@ -147,15 +149,15 @@ function initUsersSheet() {
   
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAMES.USERS);
-    sheet.appendRow(['Email', 'PasswordHash', 'Role', 'Name', 'CreatedAt', 'Active']);
-    sheet.getRange('A1:F1').setFontWeight('bold').setBackground('#4285f4').setFontColor('#ffffff');
+    sheet.appendRow(['Email', 'PasswordHash', 'Role', 'Name', 'CreatedAt', 'Active', 'FailedAttempts', 'LockedUntil']);
+    sheet.getRange('A1:H1').setFontWeight('bold').setBackground('#4285f4').setFontColor('#ffffff');
     sheet.setFrozenRows(1);
     
     // Create default admin account: admin@gracepraise.church / Admin123!
     const adminEmail = 'admin@gracepraise.church';
     const adminPassword = 'Admin123!';
     const adminHash = hashPassword(adminPassword);
-    sheet.appendRow([adminEmail, adminHash, 'admin', 'System Administrator', new Date(), 'Yes']);
+    sheet.appendRow([adminEmail, adminHash, 'admin', 'System Administrator', new Date(), 'Yes', 0, '']);
     
     Logger.log('Users sheet created with default admin account');
   }
@@ -202,7 +204,7 @@ function registerUser(email, password, name, role) {
 }
 
 /**
- * Login user
+ * Login user with account lockout protection
  */
 function loginUser(email, password) {
   const sheet = initUsersSheet();
@@ -213,8 +215,27 @@ function loginUser(email, password) {
   // Find user
   for (let i = 1; i < data.length; i++) {
     if (data[i][0].toLowerCase() === email.toLowerCase() && data[i][5] === 'Yes') {
+      // Check if account is locked (column 6: FailedAttempts, column 7: LockedUntil)
+      const failedAttempts = data[i][6] || 0;
+      const lockedUntil = data[i][7] ? new Date(data[i][7]) : null;
+      
+      // Check if account is currently locked
+      if (lockedUntil && lockedUntil > new Date()) {
+        const minutesRemaining = Math.ceil((lockedUntil - new Date()) / 60000);
+        return { 
+          success: false, 
+          error: `Account locked due to too many failed attempts. Try again in ${minutesRemaining} minutes.` 
+        };
+      }
+      
       if (data[i][1] === passwordHash) {
-        // Password correct
+        // Password correct - reset failed attempts
+        sheet.getRange(i + 1, 7).setValue(0); // Reset FailedAttempts
+        sheet.getRange(i + 1, 8).setValue(''); // Clear LockedUntil
+        
+        // Log successful login
+        logAuditEvent(email, 'LOGIN_SUCCESS', { ip: 'N/A' });
+        
         const token = createToken(email, data[i][2]);
         return {
           success: true,
@@ -226,10 +247,43 @@ function loginUser(email, password) {
           }
         };
       } else {
-        return { success: false, error: 'Invalid email or password' };
+        // Password incorrect - increment failed attempts
+        const newFailedAttempts = failedAttempts + 1;
+        sheet.getRange(i + 1, 7).setValue(newFailedAttempts);
+        
+        // Lock account after 5 failed attempts (15 minute lockout)
+        if (newFailedAttempts >= 5) {
+          const lockoutTime = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+          sheet.getRange(i + 1, 8).setValue(lockoutTime);
+          
+          // Log lockout event
+          logAuditEvent(email, 'ACCOUNT_LOCKED', { 
+            reason: 'Too many failed login attempts',
+            lockedUntil: lockoutTime.toISOString()
+          });
+          
+          return { 
+            success: false, 
+            error: 'Account locked due to too many failed attempts. Try again in 15 minutes.' 
+          };
+        }
+        
+        // Log failed attempt
+        logAuditEvent(email, 'LOGIN_FAILED', { 
+          attempts: newFailedAttempts,
+          remainingAttempts: 5 - newFailedAttempts
+        });
+        
+        return { 
+          success: false, 
+          error: `Invalid email or password. ${5 - newFailedAttempts} attempts remaining.` 
+        };
       }
     }
   }
+  
+  // Log failed attempt for unknown user
+  logAuditEvent(email, 'LOGIN_FAILED', { reason: 'User not found' });
   
   return { success: false, error: 'Invalid email or password' };
 }
@@ -256,10 +310,19 @@ function verifyUserToken(token) {
 
 /**
  * API handler for GET requests (stats, contacts, and AI features)
- * Public API - no authentication required for reading data
+ * Protected with API key authentication
  */
 function doGet(e) {
   try {
+    // Verify API key for production security
+    const apiKey = e.parameter.key || e.parameter.apiKey;
+    if (!verifyAPIKey(apiKey)) {
+      return jsonResponse({ 
+        error: 'Unauthorized', 
+        message: 'Invalid or missing API key' 
+      });
+    }
+    
     // Handle different actions
     const action = e.parameter.action || '';
     
@@ -1069,7 +1132,7 @@ function handleVerifyToken(e) {
 function handleSendSMS(e) {
   try {
     // Parse POST data
-    let to, message, from;
+    let to, message, from, userEmail;
     
     // Try to get from POST body first
     if (e.postData && e.postData.contents) {
@@ -1078,6 +1141,7 @@ function handleSendSMS(e) {
         to = postData.to;
         message = postData.message;
         from = postData.from;
+        userEmail = postData.userEmail || 'unknown@gpbc.org';
       } catch (parseError) {
         Logger.log('Error parsing POST data: ' + parseError.toString());
       }
@@ -1088,12 +1152,24 @@ function handleSendSMS(e) {
       to = to || e.parameter.to;
       message = message || e.parameter.message;
       from = from || e.parameter.from;
+      userEmail = userEmail || e.parameter.userEmail || 'unknown@gpbc.org';
     }
     
     Logger.log('handleSendSMS - to: ' + to + ', message: ' + message);
     
     if (!to || !message) {
       return jsonResponse({ error: 'Missing required parameters: to, message' });
+    }
+    
+    // Check rate limit
+    const rateLimit = checkRateLimit(userEmail, 'SEND_SMS');
+    if (!rateLimit.allowed) {
+      return jsonResponse({ 
+        error: rateLimit.error,
+        rateLimitExceeded: true,
+        remainingRequests: 0,
+        resetTime: rateLimit.resetTime
+      });
     }
     
     // Get Twilio credentials
@@ -1140,16 +1216,26 @@ function handleSendSMS(e) {
       error_message: result.error_message || ''
     });
     
+    // Log audit event
+    logAuditEvent(userEmail, 'SMS_SENT', {
+      to: to,
+      messageLength: message.length,
+      sid: result.sid,
+      status: result.status
+    });
+    
     return jsonResponse({ 
       success: true, 
       sid: result.sid,
       status: result.status,
       to: result.to,
-      from: result.from
+      from: result.from,
+      remainingRequests: rateLimit.remainingRequests
     });
       
   } catch (error) {
     Logger.log('Error in handleSendSMS: ' + error.toString());
+    logAuditEvent(userEmail || 'unknown', 'SMS_SEND_FAILED', { error: error.toString() });
     return jsonResponse({ error: 'Failed to send SMS: ' + error.toString() });
   }
 }
@@ -1339,4 +1425,223 @@ function getMessageHistory() {
     Logger.log('Error getting message history: ' + error.toString());
     return jsonResponse({ messages: [] });
   }
+}
+
+// ==================== SECURITY FEATURES ====================
+
+/**
+ * Log audit events for security tracking
+ */
+function logAuditEvent(userEmail, action, details) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(SHEET_NAMES.AUDIT_LOG);
+    
+    // Create sheet if it doesn't exist
+    if (!sheet) {
+      sheet = ss.insertSheet(SHEET_NAMES.AUDIT_LOG);
+      sheet.appendRow(['Timestamp', 'User', 'Action', 'Details', 'IP Address']);
+      sheet.getRange('A1:E1').setFontWeight('bold').setBackground('#e74c3c').setFontColor('#ffffff');
+      sheet.setFrozenRows(1);
+    }
+    
+    const timestamp = new Date();
+    const detailsStr = typeof details === 'object' ? JSON.stringify(details) : details;
+    
+    sheet.appendRow([timestamp, userEmail, action, detailsStr, 'N/A']);
+    
+    Logger.log(`AUDIT: ${action} by ${userEmail} at ${timestamp}`);
+  } catch (error) {
+    Logger.log('Error logging audit event: ' + error.toString());
+  }
+}
+
+/**
+ * Check rate limit for SMS sending
+ * Limits: 100 SMS per user per hour
+ */
+function checkRateLimit(userEmail, action) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(SHEET_NAMES.RATE_LIMITS);
+    
+    // Create sheet if it doesn't exist
+    if (!sheet) {
+      sheet = ss.insertSheet(SHEET_NAMES.RATE_LIMITS);
+      sheet.appendRow(['User', 'Action', 'Count', 'WindowStart', 'WindowEnd']);
+      sheet.getRange('A1:E1').setFontWeight('bold').setBackground('#f39c12').setFontColor('#ffffff');
+      sheet.setFrozenRows(1);
+    }
+    
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    
+    // Find user's current rate limit window
+    const data = sheet.getDataRange().getValues();
+    let userRow = -1;
+    let currentCount = 0;
+    
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] === userEmail && data[i][1] === action) {
+        const windowEnd = new Date(data[i][4]);
+        
+        // Check if current window is still valid
+        if (windowEnd > now) {
+          userRow = i + 1;
+          currentCount = data[i][2];
+          break;
+        }
+      }
+    }
+    
+    // Define rate limits
+    const limits = {
+      'SEND_SMS': 100,  // 100 SMS per hour
+      'SEND_CALL': 50,  // 50 calls per hour
+      'LOGIN': 10       // 10 login attempts per hour
+    };
+    
+    const limit = limits[action] || 100;
+    
+    // Check if limit exceeded
+    if (currentCount >= limit) {
+      logAuditEvent(userEmail, 'RATE_LIMIT_EXCEEDED', { 
+        action: action, 
+        limit: limit,
+        currentCount: currentCount 
+      });
+      
+      return {
+        allowed: false,
+        error: `Rate limit exceeded. Maximum ${limit} ${action} requests per hour.`,
+        remainingRequests: 0,
+        resetTime: data[userRow - 1][4]
+      };
+    }
+    
+    // Update or create rate limit entry
+    if (userRow > 0) {
+      // Update existing entry
+      sheet.getRange(userRow, 3).setValue(currentCount + 1);
+    } else {
+      // Create new entry
+      const windowEnd = new Date(now.getTime() + 60 * 60 * 1000);
+      sheet.appendRow([userEmail, action, 1, now, windowEnd]);
+    }
+    
+    return {
+      allowed: true,
+      remainingRequests: limit - currentCount - 1,
+      resetTime: new Date(now.getTime() + 60 * 60 * 1000)
+    };
+    
+  } catch (error) {
+    Logger.log('Error checking rate limit: ' + error.toString());
+    // Allow request on error to prevent system lockout
+    return { allowed: true, remainingRequests: 'Unknown' };
+  }
+}
+
+/**
+ * Verify API key for Google Apps Script access
+ */
+function verifyAPIKey(apiKey) {
+  const storedKey = PropertiesService.getScriptProperties().getProperty('API_KEY');
+  
+  // Generate API key if doesn't exist
+  if (!storedKey) {
+    const newKey = 'gpbc_' + Utilities.getUuid().replace(/-/g, '');
+    PropertiesService.getScriptProperties().setProperty('API_KEY', newKey);
+    Logger.log('⚠️ NEW API KEY GENERATED: ' + newKey);
+    Logger.log('⚠️ Add this to your frontend .env file as VITE_GOOGLE_API_KEY');
+    return false;
+  }
+  
+  if (!apiKey || apiKey !== storedKey) {
+    logAuditEvent('ANONYMOUS', 'API_KEY_INVALID', { providedKey: apiKey ? 'PROVIDED' : 'MISSING' });
+    return false;
+  }
+  
+  return true;
+}
+
+// ==================== END SECURITY FEATURES ====================
+
+/**
+ * Admin function: Unlock a locked user account
+ * Run this in Apps Script editor to manually unlock an account
+ */
+function unlockUserAccount() {
+  // ⚠️ EDIT THIS EMAIL BEFORE RUNNING ⚠️
+  const emailToUnlock = 'admin@gracepraise.church';
+  
+  const sheet = initUsersSheet();
+  const data = sheet.getDataRange().getValues();
+  
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0].toLowerCase() === emailToUnlock.toLowerCase()) {
+      // Reset failed attempts and clear lockout
+      sheet.getRange(i + 1, 7).setValue(0);  // FailedAttempts
+      sheet.getRange(i + 1, 8).setValue(''); // LockedUntil
+      
+      Logger.log('✅ Account unlocked: ' + emailToUnlock);
+      logAuditEvent('ADMIN', 'ACCOUNT_UNLOCKED', { 
+        unlockedUser: emailToUnlock,
+        unlockedBy: 'Manual admin intervention'
+      });
+      
+      return { success: true, message: 'Account unlocked successfully' };
+    }
+  }
+  
+  Logger.log('❌ User not found: ' + emailToUnlock);
+  return { success: false, error: 'User not found' };
+}
+
+/**
+ * Admin function: View audit log (last 100 entries)
+ */
+function viewAuditLog() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAMES.AUDIT_LOG);
+  
+  if (!sheet) {
+    Logger.log('No audit log found');
+    return [];
+  }
+  
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const rows = data.slice(1).reverse().slice(0, 100); // Last 100 entries
+  
+  Logger.log('========================================');
+  Logger.log('AUDIT LOG (Last 100 Entries)');
+  Logger.log('========================================\n');
+  
+  rows.forEach(row => {
+    Logger.log(`[${row[0]}] ${row[2]} by ${row[1]}`);
+    Logger.log(`   Details: ${row[3]}\n`);
+  });
+  
+  return rows;
+}
+
+/**
+ * Admin function: Generate new API key
+ */
+function generateNewAPIKey() {
+  const newKey = 'gpbc_' + Utilities.getUuid().replace(/-/g, '');
+  PropertiesService.getScriptProperties().setProperty('API_KEY', newKey);
+  
+  Logger.log('========================================');
+  Logger.log('🔑 NEW API KEY GENERATED');
+  Logger.log('========================================');
+  Logger.log('API Key: ' + newKey);
+  Logger.log('\n⚠️  IMPORTANT: Add this to your frontend .env file:');
+  Logger.log('VITE_GOOGLE_API_KEY=' + newKey);
+  Logger.log('========================================');
+  
+  logAuditEvent('ADMIN', 'API_KEY_REGENERATED', { timestamp: new Date() });
+  
+  return newKey;
 }

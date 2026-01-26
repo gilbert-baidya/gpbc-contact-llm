@@ -3,17 +3,23 @@
  * Connects to Google Apps Script Web App backend
  */
 
-const BASE_URL = 'https://script.google.com/macros/s/AKfycbzve9b56eA8ax_8_m93M9jgNDZJKF_onK9uNiFw1pr-cCNaD7UwPKbdcfzATvYNCOdxZg/exec';
+// Use environment variable for script URL
+const BASE_URL = import.meta.env.VITE_GOOGLE_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbzve9b56eA8ax_8_m93M9jgNDZJKF_onK9uNiFw1pr-cCNaD7UwPKbdcfzATvYNCOdxZg/exec';
+
+// Get API key from environment variables
+const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
 
 /**
- * Generic API request handler
+ * Generic API request handler with API key authentication
  * @param {string} endpoint - API endpoint path
  * @param {object} options - Fetch options
  * @returns {Promise<any>} Response data
  * @throws {Error} Descriptive error message
  */
 async function apiRequest(endpoint, options = {}) {
-  const url = `${BASE_URL}${endpoint}`;
+  // Add API key to query parameters
+  const separator = endpoint.includes('?') ? '&' : '?';
+  const url = `${BASE_URL}${endpoint}${separator}key=${API_KEY}`;
   
   try {
     const response = await fetch(url, {
