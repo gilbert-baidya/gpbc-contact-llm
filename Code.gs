@@ -98,6 +98,46 @@ function hashPassword(password) {
 }
 
 /**
+ * Validate password strength
+ * Requirements: 8+ characters, 1 uppercase, 1 lowercase, 1 number
+ */
+function validatePasswordStrength(password) {
+  // Check length
+  if (password.length < 8) {
+    return { 
+      valid: false, 
+      error: 'Password must be at least 8 characters long' 
+    };
+  }
+  
+  // Check for uppercase letter
+  if (!/[A-Z]/.test(password)) {
+    return { 
+      valid: false, 
+      error: 'Password must contain at least one uppercase letter' 
+    };
+  }
+  
+  // Check for lowercase letter
+  if (!/[a-z]/.test(password)) {
+    return { 
+      valid: false, 
+      error: 'Password must contain at least one lowercase letter' 
+    };
+  }
+  
+  // Check for number
+  if (!/[0-9]/.test(password)) {
+    return { 
+      valid: false, 
+      error: 'Password must contain at least one number' 
+    };
+  }
+  
+  return { valid: true };
+}
+
+/**
  * Create a simple JWT-like token
  */
 function createToken(email, role) {
@@ -153,9 +193,9 @@ function initUsersSheet() {
     sheet.getRange('A1:H1').setFontWeight('bold').setBackground('#4285f4').setFontColor('#ffffff');
     sheet.setFrozenRows(1);
     
-    // Create default admin account: admin@gracepraise.church / Admin123!
+    // Create default admin account: admin@gracepraise.church / AdminGPBC2026!
     const adminEmail = 'admin@gracepraise.church';
-    const adminPassword = 'Admin123!';
+    const adminPassword = 'AdminGPBC2026!';
     const adminHash = hashPassword(adminPassword);
     sheet.appendRow([adminEmail, adminHash, 'admin', 'System Administrator', new Date(), 'Yes', 0, '']);
     
@@ -180,8 +220,9 @@ function registerUser(email, password, name, role) {
   }
   
   // Validate password strength
-  if (password.length < 8) {
-    return { success: false, error: 'Password must be at least 8 characters' };
+  const passwordValidation = validatePasswordStrength(password);
+  if (!passwordValidation.valid) {
+    return { success: false, error: passwordValidation.error };
   }
   
   // Hash password and create user
