@@ -31,17 +31,161 @@ function getJWTSecret() {
   return secret;
 }
 
-// Secure API Key - Server-side only, never exposed to frontend
-function getSecureAPIKey() {
-  let apiKey = PropertiesService.getScriptProperties().getProperty('SECURE_API_KEY');
-  if (!apiKey) {
-    // Auto-generate secure API key on first run
-    apiKey = 'gpbc_secure_' + Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
-    PropertiesService.getScriptProperties().setProperty('SECURE_API_KEY', apiKey);
-    Logger.log('⚠️ NEW SECURE API KEY GENERATED: ' + apiKey);
-    Logger.log('⚠️ Store this securely in your backend environment variables ONLY');
+/**
+ * Validate API Key using existing API_KEY property
+ * Call this at the beginning of protected endpoints
+ */
+function validateApiKey(e) {
+  const scriptProperties = PropertiesService.getScriptProperties();
+  const validKey = scriptProperties.getProperty('API_KEY');
+  
+  if (!validKey) {
+    Logger.log('⚠️ API_KEY not configured in Script Properties');
+    throw new Error('Server configuration error: API_KEY not set');
   }
-  return apiKey;
+  
+  // Try to get API key from parameter or header
+  const providedKey = e.parameter.apiKey || (e.headers && e.headers['X-API-Key']);
+  
+  if (!providedKey || providedKey !== validKey) {
+    logAuditEvent('ANONYMOUS', 'API_KEY_INVALID', { 
+      hasKey: !!providedKey,
+      source: e.parameter.apiKey ? 'parameter' : 'header'
+    });
+    throw new Error('Unauthorized: Invalid API Key');
+  }
+  
+  return true;
+}
+
+/**
+ * Prevent duplicate message sends using idempotency key
+ * Stores keys in cache for 5 minutes (300 seconds)
+ */
+function preventDuplicate(idempotencyKey) {
+  if (!idempotencyKey) {
+    return; // Idempotency is optional but recommended
+  }
+  
+  const cache = CacheService.getScriptCache();
+  
+  if (cache.get(idempotencyKey)) {
+    logAuditEvent('SYSTEM', 'DUPLICATE_PREVENTED', { idempotencyKey: idempotencyKey });
+    throw new Error('Duplicate message prevented');
+  }
+  
+  // Store for 5 minutes
+  cache.put(idempotencyKey, '1', 300);
+}
+
+/**
+ * Secure Twilio message sending function
+ * Uses existing Script Properties: TWILIO_SID, TWILIO_AUTH, TWILIO_FROM
+ * Supports both SMS and MMS (with media URLs)
+ */
+function sendTwilioMessage(to, body, mediaUrls) {
+  const props = PropertiesService.getScriptProperties();
+  
+  const accountSid = props.getProperty('TWILIO_SID');
+  const authToken = props.getProperty('TWILIO_AUTH');
+  const fromNumber = props.getProperty('TWILIO_FROM');
+  
+  if (!accountSid || !authToken || !fromNumber) {
+    Logger.log('⚠️ Twilio credentials not configured in Script Properties');
+    throw new Error('Server configuration error: Twilio credentials missing');
+  }
+  
+  const payload = {
+    To: to,
+    From: fromNumber,
+    Body: body
+  };
+  
+  // Add media URLs for MMS
+  if (mediaUrls && mediaUrls.length > 0) {
+    payload.MediaUrl = mediaUrls;
+  }
+  
+  const options = {
+    method: 'post',
+    headers: {
+      'Authorization': 'Basic ' + Utilities.base64Encode(accountSid + ':' + authToken)
+    },
+    payload: payload,
+    muteHttpExceptions: true
+  };
+  
+  const url = 'https://api.twilio.com/2010-04-01/Accounts/' + accountSid + '/Messages.json';
+  
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    const responseCode = response.getResponseCode();
+    const result = JSON.parse(response.getContentText());
+    
+    if (responseCode !== 200 && responseCode !== 201) {
+      Logger.log('Twilio API error: ' + response.getContentText());
+      throw new Error('Twilio API error: ' + (result.message || 'Unknown error'));
+    }
+    
+    return result;
+  } catch (error) {
+    Logger.log('Error calling Twilio API: ' + error.toString());
+    throw error;
+  }
+}
+
+/**
+ * Secure Twilio call function
+ * Uses existing Script Properties: TWILIO_SID, TWILIO_AUTH, TWILIO_FROM
+ * Creates voice call with text-to-speech message
+ */
+function sendTwilioCall(to, message) {
+  const props = PropertiesService.getScriptProperties();
+  
+  const accountSid = props.getProperty('TWILIO_SID');
+  const authToken = props.getProperty('TWILIO_AUTH');
+  const fromNumber = props.getProperty('TWILIO_FROM');
+  
+  if (!accountSid || !authToken || !fromNumber) {
+    Logger.log('⚠️ Twilio credentials not configured in Script Properties');
+    throw new Error('Server configuration error: Twilio credentials missing');
+  }
+  
+  // Create TwiML for voice message
+  const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">' + escapeXml(message) + '</Say></Response>';
+  
+  const payload = {
+    To: to,
+    From: fromNumber,
+    Twiml: twiml
+  };
+  
+  const options = {
+    method: 'post',
+    headers: {
+      'Authorization': 'Basic ' + Utilities.base64Encode(accountSid + ':' + authToken)
+    },
+    payload: payload,
+    muteHttpExceptions: true
+  };
+  
+  const url = 'https://api.twilio.com/2010-04-01/Accounts/' + accountSid + '/Calls.json';
+  
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    const responseCode = response.getResponseCode();
+    const result = JSON.parse(response.getContentText());
+    
+    if (responseCode !== 200 && responseCode !== 201) {
+      Logger.log('Twilio API error: ' + response.getContentText());
+      throw new Error('Twilio API error: ' + (result.message || 'Unknown error'));
+    }
+    
+    return result;
+  } catch (error) {
+    Logger.log('Error calling Twilio API: ' + error.toString());
+    throw error;
+  }
 }
 
 // Twilio Auth Token for webhook signature validation
@@ -96,49 +240,6 @@ function callOpenAI(message, systemPrompt, maxTokens) {
 }
 
 /**
- * Verify secure API key from request headers
- * Security: Server-side only, never accept from query string
- */
-function verifySecureAPIKey(e) {
-  try {
-    // Only accept API key from POST headers (X-API-Key)
-    if (!e || !e.parameter) {
-      return false;
-    }
-    
-    // Get API key from header (Apps Script doesn't expose headers directly in e.parameter)
-    // For Apps Script, we need to check if the key is in the POST body
-    let providedKey = null;
-    
-    if (e.postData && e.postData.contents) {
-      try {
-        const postData = JSON.parse(e.postData.contents);
-        providedKey = postData.apiKey;
-      } catch (parseError) {
-        Logger.log('Error parsing API key from POST: ' + parseError.toString());
-      }
-    }
-    
-    if (!providedKey) {
-      logAuditEvent('ANONYMOUS', 'API_AUTH_FAILED', { reason: 'No API key provided' });
-      return false;
-    }
-    
-    const secureKey = getSecureAPIKey();
-    
-    if (providedKey !== secureKey) {
-      logAuditEvent('ANONYMOUS', 'API_AUTH_FAILED', { reason: 'Invalid API key' });
-      return false;
-    }
-    
-    return true;
-  } catch (error) {
-    Logger.log('Error verifying secure API key: ' + error.toString());
-    return false;
-  }
-}
-
-/**
  * Extract and verify user token from request
  * Returns user payload or null
  */
@@ -180,34 +281,6 @@ function hasRequiredRole(userPayload, requiredRoles) {
   }
   
   return userPayload.role === requiredRoles;
-}
-
-/**
- * Idempotency check using CacheService
- * Prevents duplicate message sends within 5-minute window
- */
-function checkIdempotency(idempotencyKey, userEmail) {
-  if (!idempotencyKey) {
-    return { valid: false, error: 'Idempotency key required' };
-  }
-  
-  const cache = CacheService.getScriptCache();
-  const cacheKey = 'idempotency_' + userEmail + '_' + idempotencyKey;
-  
-  // Check if key already exists
-  const existing = cache.get(cacheKey);
-  if (existing) {
-    return { 
-      valid: false, 
-      error: 'Duplicate request detected. Please wait before retrying.',
-      isDuplicate: true 
-    };
-  }
-  
-  // Store key for 5 minutes (300 seconds)
-  cache.put(cacheKey, 'used', 300);
-  
-  return { valid: true };
 }
 
 /**
@@ -1145,35 +1218,16 @@ function sendPastorAlert(senderName, senderPhone, prayerMessage) {
 }
 
 /**
- * Send SMS via Twilio REST API
+ * Send SMS via Twilio REST API using Script Properties
+ * DEPRECATED: Use sendTwilioMessage() instead for better security
+ * Kept for backward compatibility with pastor alerts
  */
 function sendTwilioSMS(sid, auth, from, to, body) {
-  const url = `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`;
-  
-  const payload = {
-    From: from,
-    To: to,
-    Body: body
-  };
-  
-  const options = {
-    method: 'post',
-    headers: {
-      'Authorization': 'Basic ' + Utilities.base64Encode(sid + ':' + auth)
-    },
-    payload: payload,
-    muteHttpExceptions: true
-  };
-  
+  // Use the secure sendTwilioMessage function instead
   try {
-    const response = UrlFetchApp.fetch(url, options);
-    const code = response.getResponseCode();
-    
-    if (code !== 200 && code !== 201) {
-      Logger.log('Twilio API error: ' + response.getContentText());
-    }
+    return sendTwilioMessage(to, body, []);
   } catch (error) {
-    Logger.log('Error calling Twilio API: ' + error.toString());
+    Logger.log('Error in sendTwilioSMS: ' + error.toString());
   }
 }
 
@@ -1474,131 +1528,95 @@ function handleVerifyToken(e) {
 
 /**
  * Handle Send SMS API call
- * SECURED: Requires authentication, authorization, idempotency, and rate limiting
+ * SECURED: Uses existing API_KEY for authentication, supports idempotency, MMS with media URLs
  */
 function handleSendSMS(e) {
   try {
-    // SECURITY 1: Verify secure API key
-    if (!verifySecureAPIKey(e)) {
-      logAuditEvent('ANONYMOUS', 'SMS_SEND_UNAUTHORIZED', { reason: 'Invalid API key' });
-      return unauthorizedResponse('Invalid or missing API key');
+    // SECURITY 1: Validate API Key using existing API_KEY property
+    validateApiKey(e);
+    
+    // SECURITY 2: Prevent duplicate sends using idempotency key (optional but recommended)
+    const idempotencyKey = e.parameter.idempotencyKey;
+    if (idempotencyKey) {
+      preventDuplicate(idempotencyKey);
     }
     
-    // SECURITY 2: Verify user token and extract user info
-    const userPayload = verifyRequestToken(e);
-    if (!userPayload) {
-      logAuditEvent('ANONYMOUS', 'SMS_SEND_UNAUTHORIZED', { reason: 'Invalid token' });
-      return unauthorizedResponse('Valid authentication token required');
+    // SECURITY 3: Verify user token and extract user info (if token provided)
+    let userEmail = 'api_user';
+    let userRole = 'api';
+    
+    if (e.parameter.token || (e.postData && e.postData.contents)) {
+      const userPayload = verifyRequestToken(e);
+      if (userPayload) {
+        userEmail = userPayload.email;
+        userRole = userPayload.role;
+        
+        // Check role authorization (admin or pastor only)
+        if (!hasRequiredRole(userPayload, ['admin', 'pastor'])) {
+          logAuditEvent(userEmail, 'SMS_SEND_FORBIDDEN', { role: userRole });
+          return forbiddenResponse('Only admin and pastor roles can send messages');
+        }
+      }
     }
     
-    const userEmail = userPayload.email;
-    const userRole = userPayload.role;
+    // Parse request parameters
+    let to, body, mediaUrls;
     
-    // SECURITY 3: Check role authorization (admin or pastor only)
-    if (!hasRequiredRole(userPayload, ['admin', 'pastor'])) {
-      logAuditEvent(userEmail, 'SMS_SEND_FORBIDDEN', { role: userRole });
-      return forbiddenResponse('Only admin and pastor roles can send messages');
-    }
-    
-    // Parse POST data
-    let to, message, from, idempotencyKey;
-    
+    // Try POST body first
     if (e.postData && e.postData.contents) {
       try {
         const postData = JSON.parse(e.postData.contents);
         to = postData.to;
-        message = postData.message;
-        from = postData.from;
-        idempotencyKey = postData.idempotencyKey;
+        body = postData.body || postData.message;
+        mediaUrls = postData.mediaUrls;
       } catch (parseError) {
         Logger.log('Error parsing POST data: ' + parseError.toString());
-        return jsonResponse({ error: 'Invalid request format' });
       }
     }
     
-    if (!to || !message) {
-      return jsonResponse({ error: 'Missing required parameters: to, message' });
+    // Fallback to query parameters
+    if (!to || !body) {
+      to = to || e.parameter.to;
+      body = body || e.parameter.body || e.parameter.message;
+      mediaUrls = mediaUrls || (e.parameter.mediaUrls ? JSON.parse(e.parameter.mediaUrls) : []);
     }
     
-    // SECURITY 4: Check idempotency
-    if (!idempotencyKey) {
-      logAuditEvent(userEmail, 'SMS_SEND_REJECTED', { reason: 'Missing idempotency key' });
+    if (!to || !body) {
       return jsonResponse({ 
-        error: 'Idempotency key required',
+        error: 'Missing required parameters: to, body (or message)',
         success: false 
       });
     }
     
-    const idempotencyCheck = checkIdempotency(idempotencyKey, userEmail);
-    if (!idempotencyCheck.valid) {
-      if (idempotencyCheck.isDuplicate) {
-        logAuditEvent(userEmail, 'SMS_SEND_DUPLICATE', { 
-          idempotencyKey: idempotencyKey,
-          to: to 
+    // SECURITY 4: Check advanced rate limits (if user authenticated)
+    if (userEmail !== 'api_user') {
+      const rateLimit = checkAdvancedRateLimit(userEmail, 'SEND_SMS');
+      if (!rateLimit.allowed) {
+        return jsonResponse({ 
+          error: rateLimit.error,
+          success: false,
+          rateLimitExceeded: true,
+          remainingRequests: 0,
+          resetTime: rateLimit.resetTime
         });
       }
-      return jsonResponse({ 
-        error: idempotencyCheck.error,
-        success: false,
-        isDuplicate: idempotencyCheck.isDuplicate || false
-      });
     }
     
-    // SECURITY 5: Check advanced rate limits (user + system-wide)
-    const rateLimit = checkAdvancedRateLimit(userEmail, 'SEND_SMS');
-    if (!rateLimit.allowed) {
-      return jsonResponse({ 
-        error: rateLimit.error,
-        success: false,
-        rateLimitExceeded: true,
-        remainingRequests: 0,
-        resetTime: rateLimit.resetTime
-      });
-    }
-    
-    // Get Twilio credentials
-    const props = PropertiesService.getScriptProperties();
-    const TWILIO_ACCOUNT_SID = props.getProperty('TWILIO_SID');
-    const TWILIO_AUTH_TOKEN = props.getProperty('TWILIO_AUTH');
-    const TWILIO_PHONE = props.getProperty('TWILIO_FROM');
-    
-    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_PHONE) {
-      return jsonResponse({ error: 'Twilio credentials not configured' });
-    }
-    
-    // Twilio API endpoint
-    const url = 'https://api.twilio.com/2010-04-01/Accounts/' + TWILIO_ACCOUNT_SID + '/Messages.json';
-    
-    // Create auth header
-    const authHeader = 'Basic ' + Utilities.base64Encode(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN);
-    
-    // Send SMS
-    const options = {
-      method: 'post',
-      headers: {
-        'Authorization': authHeader
-      },
-      payload: {
-        To: to,
-        From: from || TWILIO_PHONE,
-        Body: message
-      }
-    };
-    
-    const response = UrlFetchApp.fetch(url, options);
-    const result = JSON.parse(response.getContentText());
+    // Send message using secure Twilio function
+    const result = sendTwilioMessage(to, body, mediaUrls);
     
     // Log to SMS_Log sheet
     logToSheet('SMS_Log', {
       timestamp: new Date(),
       to: to,
-      from: from || TWILIO_PHONE,
-      message: message,
+      from: result.from,
+      message: body,
       status: result.status,
       sid: result.sid,
       user: userEmail,
       role: userRole,
-      idempotency_key: idempotencyKey,
+      idempotency_key: idempotencyKey || '',
+      media_count: (mediaUrls && mediaUrls.length) || 0,
       error_code: result.error_code || '',
       error_message: result.error_message || ''
     });
@@ -1606,10 +1624,11 @@ function handleSendSMS(e) {
     // Log audit event
     logAuditEvent(userEmail, 'SMS_SENT', {
       to: to,
-      messageLength: message.length,
+      messageLength: body.length,
       sid: result.sid,
       status: result.status,
-      idempotencyKey: idempotencyKey
+      idempotencyKey: idempotencyKey || 'none',
+      hasMedia: !!(mediaUrls && mediaUrls.length)
     });
     
     return jsonResponse({ 
@@ -1618,145 +1637,127 @@ function handleSendSMS(e) {
       status: result.status,
       to: result.to,
       from: result.from,
-      remainingRequests: rateLimit.remainingRequests
+      numMedia: result.num_media || '0',
+      dateCreated: result.date_created
     });
       
   } catch (error) {
-    Logger.log('Error in handleSendSMS: ' + error.toString());
-    logAuditEvent(userEmail || 'unknown', 'SMS_SEND_FAILED', { error: error.toString() });
-    return jsonResponse({ error: 'Failed to send SMS: ' + error.toString(), success: false });
+    const errorMessage = error.toString();
+    Logger.log('Error in handleSendSMS: ' + errorMessage);
+    
+    // Check if it's a duplicate error
+    if (errorMessage.includes('Duplicate message prevented')) {
+      return jsonResponse({ 
+        error: 'Duplicate message prevented',
+        success: false,
+        isDuplicate: true 
+      });
+    }
+    
+    // Check if it's an unauthorized error
+    if (errorMessage.includes('Unauthorized')) {
+      return jsonResponse({ 
+        error: 'Unauthorized: Invalid API Key',
+        success: false 
+      });
+    }
+    
+    logAuditEvent(userEmail || 'unknown', 'SMS_SEND_FAILED', { error: errorMessage });
+    return jsonResponse({ 
+      error: 'Failed to send SMS: ' + errorMessage, 
+      success: false 
+    });
   }
 }
 
 /**
  * Handle Make Call API call
- * SECURED: Requires authentication, authorization, idempotency, and rate limiting
+ * SECURED: Uses existing API_KEY for authentication, supports idempotency
  */
 function handleMakeCall(e) {
   try {
-    // SECURITY 1: Verify secure API key
-    if (!verifySecureAPIKey(e)) {
-      logAuditEvent('ANONYMOUS', 'CALL_UNAUTHORIZED', { reason: 'Invalid API key' });
-      return unauthorizedResponse('Invalid or missing API key');
+    // SECURITY 1: Validate API Key using existing API_KEY property
+    validateApiKey(e);
+    
+    // SECURITY 2: Prevent duplicate calls using idempotency key (optional but recommended)
+    const idempotencyKey = e.parameter.idempotencyKey;
+    if (idempotencyKey) {
+      preventDuplicate(idempotencyKey);
     }
     
-    // SECURITY 2: Verify user token and extract user info
-    const userPayload = verifyRequestToken(e);
-    if (!userPayload) {
-      logAuditEvent('ANONYMOUS', 'CALL_UNAUTHORIZED', { reason: 'Invalid token' });
-      return unauthorizedResponse('Valid authentication token required');
+    // SECURITY 3: Verify user token and extract user info (if token provided)
+    let userEmail = 'api_user';
+    let userRole = 'api';
+    
+    if (e.parameter.token || (e.postData && e.postData.contents)) {
+      const userPayload = verifyRequestToken(e);
+      if (userPayload) {
+        userEmail = userPayload.email;
+        userRole = userPayload.role;
+        
+        // Check role authorization (admin or pastor only)
+        if (!hasRequiredRole(userPayload, ['admin', 'pastor'])) {
+          logAuditEvent(userEmail, 'CALL_FORBIDDEN', { role: userRole });
+          return forbiddenResponse('Only admin and pastor roles can make calls');
+        }
+      }
     }
     
-    const userEmail = userPayload.email;
-    const userRole = userPayload.role;
+    // Parse request parameters
+    let to, message;
     
-    // SECURITY 3: Check role authorization (admin or pastor only)
-    if (!hasRequiredRole(userPayload, ['admin', 'pastor'])) {
-      logAuditEvent(userEmail, 'CALL_FORBIDDEN', { role: userRole });
-      return forbiddenResponse('Only admin and pastor roles can make calls');
-    }
-    
-    // Parse POST data
-    let to, message, from, idempotencyKey;
-    
+    // Try POST body first
     if (e.postData && e.postData.contents) {
       try {
         const postData = JSON.parse(e.postData.contents);
         to = postData.to;
-        message = postData.message;
-        from = postData.from;
-        idempotencyKey = postData.idempotencyKey;
+        message = postData.message || postData.body;
       } catch (parseError) {
         Logger.log('Error parsing POST data: ' + parseError.toString());
-        return jsonResponse({ error: 'Invalid request format' });
       }
     }
     
+    // Fallback to query parameters
     if (!to || !message) {
-      return jsonResponse({ error: 'Missing required parameters: to, message' });
+      to = to || e.parameter.to;
+      message = message || e.parameter.message || e.parameter.body;
     }
     
-    // SECURITY 4: Check idempotency
-    if (!idempotencyKey) {
-      logAuditEvent(userEmail, 'CALL_REJECTED', { reason: 'Missing idempotency key' });
+    if (!to || !message) {
       return jsonResponse({ 
-        error: 'Idempotency key required',
+        error: 'Missing required parameters: to, message (or body)',
         success: false 
       });
     }
     
-    const idempotencyCheck = checkIdempotency(idempotencyKey, userEmail);
-    if (!idempotencyCheck.valid) {
-      if (idempotencyCheck.isDuplicate) {
-        logAuditEvent(userEmail, 'CALL_DUPLICATE', { 
-          idempotencyKey: idempotencyKey,
-          to: to 
+    // SECURITY 4: Check advanced rate limits (if user authenticated)
+    if (userEmail !== 'api_user') {
+      const rateLimit = checkAdvancedRateLimit(userEmail, 'SEND_CALL');
+      if (!rateLimit.allowed) {
+        return jsonResponse({ 
+          error: rateLimit.error,
+          success: false,
+          rateLimitExceeded: true,
+          remainingRequests: 0,
+          resetTime: rateLimit.resetTime
         });
       }
-      return jsonResponse({ 
-        error: idempotencyCheck.error,
-        success: false,
-        isDuplicate: idempotencyCheck.isDuplicate || false
-      });
     }
     
-    // SECURITY 5: Check advanced rate limits
-    const rateLimit = checkAdvancedRateLimit(userEmail, 'SEND_CALL');
-    if (!rateLimit.allowed) {
-      return jsonResponse({ 
-        error: rateLimit.error,
-        success: false,
-        rateLimitExceeded: true,
-        remainingRequests: 0,
-        resetTime: rateLimit.resetTime
-      });
-    }
-    
-    // Get Twilio credentials
-    const props = PropertiesService.getScriptProperties();
-    const TWILIO_ACCOUNT_SID = props.getProperty('TWILIO_SID');
-    const TWILIO_AUTH_TOKEN = props.getProperty('TWILIO_AUTH');
-    const TWILIO_PHONE = props.getProperty('TWILIO_FROM');
-    
-    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_PHONE) {
-      return jsonResponse({ error: 'Twilio credentials not configured' });
-    }
-    
-    // Create TwiML for voice message
-    const twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">' + escapeXml(message) + '</Say></Response>';
-    
-    // Twilio API endpoint for calls
-    const url = 'https://api.twilio.com/2010-04-01/Accounts/' + TWILIO_ACCOUNT_SID + '/Calls.json';
-    
-    // Create auth header
-    const authHeader = 'Basic ' + Utilities.base64Encode(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN);
-    
-    const options = {
-      method: 'post',
-      headers: {
-        'Authorization': authHeader
-      },
-      payload: {
-        To: to,
-        From: from || TWILIO_PHONE,
-        Twiml: twiml
-      }
-    };
-    
-    const response = UrlFetchApp.fetch(url, options);
-    const result = JSON.parse(response.getContentText());
+    // Make call using secure Twilio function
+    const result = sendTwilioCall(to, message);
     
     // Log to Call_Log sheet
     logToSheet('Call_Log', {
       timestamp: new Date(),
       to: to,
-      from: from || TWILIO_PHONE,
+      from: result.from,
       message: message,
       status: result.status,
       sid: result.sid,
       user: userEmail,
       role: userRole,
-      idempotency_key: idempotencyKey,
+      idempotency_key: idempotencyKey || '',
       duration: result.duration || 0,
       error_code: result.error_code || '',
       error_message: result.error_message || ''
@@ -1765,9 +1766,10 @@ function handleMakeCall(e) {
     // Log audit event
     logAuditEvent(userEmail, 'CALL_MADE', {
       to: to,
+      messageLength: message.length,
       sid: result.sid,
       status: result.status,
-      idempotencyKey: idempotencyKey
+      idempotencyKey: idempotencyKey || 'none'
     });
     
     return jsonResponse({ 
@@ -1776,13 +1778,35 @@ function handleMakeCall(e) {
       status: result.status,
       to: result.to,
       from: result.from,
-      remainingRequests: rateLimit.remainingRequests
+      dateCreated: result.date_created
     });
       
   } catch (error) {
-    Logger.log('Error in handleMakeCall: ' + error.toString());
-    logAuditEvent(userEmail || 'unknown', 'CALL_FAILED', { error: error.toString() });
-    return jsonResponse({ error: 'Failed to make call: ' + error.toString(), success: false });
+    const errorMessage = error.toString();
+    Logger.log('Error in handleMakeCall: ' + errorMessage);
+    
+    // Check if it's a duplicate error
+    if (errorMessage.includes('Duplicate message prevented')) {
+      return jsonResponse({ 
+        error: 'Duplicate call prevented',
+        success: false,
+        isDuplicate: true 
+      });
+    }
+    
+    // Check if it's an unauthorized error
+    if (errorMessage.includes('Unauthorized')) {
+      return jsonResponse({ 
+        error: 'Unauthorized: Invalid API Key',
+        success: false 
+      });
+    }
+    
+    logAuditEvent(userEmail || 'unknown', 'CALL_FAILED', { error: errorMessage });
+    return jsonResponse({ 
+      error: 'Failed to make call: ' + errorMessage, 
+      success: false 
+    });
   }
 }
 
@@ -2103,32 +2127,6 @@ function generateNewAPIKey() {
 }
 
 /**
- * Admin function: Generate new SECURE API key
- * This is the server-side key used for messaging endpoints
- */
-function generateNewSecureAPIKey() {
-  const newKey = 'gpbc_secure_' + Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
-  PropertiesService.getScriptProperties().setProperty('SECURE_API_KEY', newKey);
-  
-  Logger.log('========================================');
-  Logger.log('🔐 NEW SECURE API KEY GENERATED');
-  Logger.log('========================================');
-  Logger.log('Secure API Key: ' + newKey);
-  Logger.log('\n⚠️  CRITICAL: Store this in your BACKEND environment only!');
-  Logger.log('⚠️  NEVER expose this key in frontend code or client-side config');
-  Logger.log('⚠️  This key is required for sendSMS and makeCall operations');
-  Logger.log('\n📝 Backend Setup:');
-  Logger.log('1. Add to backend .env: SECURE_API_KEY=' + newKey);
-  Logger.log('2. Include in POST body when calling sendSMS/makeCall');
-  Logger.log('3. Rotate this key periodically for security');
-  Logger.log('========================================');
-  
-  logAuditEvent('ADMIN', 'SECURE_API_KEY_REGENERATED', { timestamp: new Date() });
-  
-  return newKey;
-}
-
-/**
  * Admin function: View current security configuration
  */
 function viewSecurityConfig() {
@@ -2140,20 +2138,19 @@ function viewSecurityConfig() {
   
   const jwtSecret = props.getProperty('JWT_SECRET');
   const apiKey = props.getProperty('API_KEY');
-  const secureApiKey = props.getProperty('SECURE_API_KEY');
   const twilioSid = props.getProperty('TWILIO_SID');
   const twilioAuth = props.getProperty('TWILIO_AUTH');
   const twilioFrom = props.getProperty('TWILIO_FROM');
   
   Logger.log('JWT Secret: ' + (jwtSecret ? '✅ Configured' : '❌ Missing'));
-  Logger.log('API Key (Read-only): ' + (apiKey ? '✅ Configured' : '❌ Missing'));
-  Logger.log('Secure API Key (Messaging): ' + (secureApiKey ? '✅ Configured' : '❌ Missing'));
+  Logger.log('API Key (Messaging & Read): ' + (apiKey ? '✅ Configured' : '❌ Missing'));
   Logger.log('Twilio SID: ' + (twilioSid ? '✅ Configured' : '❌ Missing'));
   Logger.log('Twilio Auth Token: ' + (twilioAuth ? '✅ Configured' : '❌ Missing'));
   Logger.log('Twilio Phone: ' + (twilioFrom ? '✅ Configured (' + twilioFrom + ')' : '❌ Missing'));
   
   Logger.log('\n📊 Security Features:');
-  Logger.log('✅ Token-based authentication');
+  Logger.log('✅ API Key authentication');
+  Logger.log('✅ Token-based authentication (optional)');
   Logger.log('✅ Role-based authorization');
   Logger.log('✅ Idempotency protection (5-minute window)');
   Logger.log('✅ User rate limiting (100 SMS/hour, 50 calls/hour)');
@@ -2163,11 +2160,11 @@ function viewSecurityConfig() {
   Logger.log('✅ Account lockout protection');
   
   Logger.log('\n⚠️  RECOMMENDATIONS:');
-  if (!secureApiKey) {
-    Logger.log('❗ Run generateNewSecureAPIKey() to enable secure messaging');
+  if (!apiKey) {
+    Logger.log('❗ Configure API_KEY in Script Properties for secure messaging');
   }
   if (!twilioAuth) {
-    Logger.log('❗ Configure Twilio credentials for webhook validation');
+    Logger.log('❗ Configure Twilio credentials for SMS/Call functionality');
   }
   
   Logger.log('========================================');
@@ -2175,7 +2172,6 @@ function viewSecurityConfig() {
   return {
     jwtSecret: !!jwtSecret,
     apiKey: !!apiKey,
-    secureApiKey: !!secureApiKey,
     twilioConfigured: !!(twilioSid && twilioAuth && twilioFrom)
   };
 }
