@@ -169,10 +169,15 @@ export async function sendSMS(to: string, message: string, from?: string): Promi
     console.log('📤 Sending SMS to:', to);
     console.log('📤 URL:', url);
     
+    // Generate idempotency key for duplicate prevention
+    const idempotencyKey = crypto.randomUUID();
+    
     // Use a simple POST to avoid CORS preflight on Apps Script
     const formBody = new URLSearchParams({
+      apiKey: GOOGLE_API_KEY,
+      idempotencyKey: idempotencyKey,
       to,
-      message,
+      body: message,
       ...(from ? { from } : {})
     });
 
@@ -218,8 +223,13 @@ export async function makeCall(to: string, message: string, from?: string): Prom
     
     console.log('📞 Making call to:', to);
     
+    // Generate idempotency key for duplicate prevention
+    const idempotencyKey = crypto.randomUUID();
+    
     // Use a simple POST to avoid CORS preflight on Apps Script
     const formBody = new URLSearchParams({
+      apiKey: GOOGLE_API_KEY,
+      idempotencyKey: idempotencyKey,
       to,
       message,
       ...(from ? { from } : {})
