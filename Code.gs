@@ -82,6 +82,10 @@ function preventDuplicate(idempotencyKey) {
  * Secure Twilio message sending function
  * Uses existing Script Properties: TWILIO_SID, TWILIO_AUTH, TWILIO_FROM
  * Supports both SMS and MMS (with media URLs)
+ * 
+ * Phase 3.1-3.2: Audited and Extended for Full MMS Support
+ * - SMS: Works normally when mediaUrls is null or empty
+ * - MMS: Works when mediaUrls is provided (up to 10 media URLs per Twilio spec)
  */
 function sendTwilioMessage(to, body, mediaUrls) {
   const props = PropertiesService.getScriptProperties();
@@ -101,9 +105,17 @@ function sendTwilioMessage(to, body, mediaUrls) {
     Body: body
   };
   
-  // Add media URLs for MMS
-  if (mediaUrls && mediaUrls.length > 0) {
-    payload.MediaUrl = mediaUrls;
+  // Add media URLs for MMS (Twilio supports up to 10 media URLs)
+  // Format: MediaUrl, MediaUrl1, MediaUrl2, etc.
+  if (mediaUrls && Array.isArray(mediaUrls) && mediaUrls.length > 0) {
+    mediaUrls.forEach(function(url, index) {
+      if (index === 0) {
+        payload['MediaUrl'] = url;
+      } else {
+        payload['MediaUrl' + index] = url;
+      }
+    });
+    Logger.log('📎 Adding ' + mediaUrls.length + ' media URL(s) for MMS');
   }
   
   const options = {
@@ -127,6 +139,7 @@ function sendTwilioMessage(to, body, mediaUrls) {
       throw new Error('Twilio API error: ' + (result.message || 'Unknown error'));
     }
     
+    Logger.log('✅ Message sent successfully - SID: ' + result.sid + ', Media: ' + (result.num_media || 0));
     return result;
   } catch (error) {
     Logger.log('Error calling Twilio API: ' + error.toString());
@@ -1531,6 +1544,7 @@ function handleVerifyToken(e) {
 /**
  * Handle Send SMS API call
  * SECURED: Uses existing API_KEY for authentication, supports idempotency, MMS with media URLs
+ * Phase 3.3: Enhanced to fully support MMS with backward compatibility for SMS
  */
 function handleSendSMS(e) {
   try {
@@ -1562,7 +1576,7 @@ function handleSendSMS(e) {
     }
     
     // Parse request parameters
-    let to, body, mediaUrls;
+    let to, body, mediaUrls = [];
     
     // Try POST body first
     if (e.postData && e.postData.contents) {
@@ -1570,7 +1584,20 @@ function handleSendSMS(e) {
         const postData = JSON.parse(e.postData.contents);
         to = postData.to;
         body = postData.body || postData.message;
-        mediaUrls = postData.mediaUrls;
+        
+        // Parse mediaUrls - support both array and JSON string
+        if (postData.mediaUrls) {
+          if (Array.isArray(postData.mediaUrls)) {
+            mediaUrls = postData.mediaUrls;
+          } else if (typeof postData.mediaUrls === 'string') {
+            try {
+              mediaUrls = JSON.parse(postData.mediaUrls);
+            } catch (e) {
+              Logger.log('Error parsing mediaUrls string: ' + e.toString());
+              mediaUrls = [postData.mediaUrls]; // Single URL as string
+            }
+          }
+        }
       } catch (parseError) {
         Logger.log('Error parsing POST data: ' + parseError.toString());
       }
@@ -1580,7 +1607,18 @@ function handleSendSMS(e) {
     if (!to || !body) {
       to = to || e.parameter.to;
       body = body || e.parameter.body || e.parameter.message;
-      mediaUrls = mediaUrls || (e.parameter.mediaUrls ? JSON.parse(e.parameter.mediaUrls) : []);
+      
+      // Parse mediaUrls from query parameter
+      if (!mediaUrls || mediaUrls.length === 0) {
+        if (e.parameter.mediaUrls) {
+          try {
+            mediaUrls = JSON.parse(e.parameter.mediaUrls);
+          } catch (e) {
+            Logger.log('Error parsing mediaUrls parameter: ' + e.toString());
+            mediaUrls = [e.parameter.mediaUrls]; // Single URL as string
+          }
+        }
+      }
     }
     
     if (!to || !body) {
@@ -1588,6 +1626,11 @@ function handleSendSMS(e) {
         error: 'Missing required parameters: to, body (or message)',
         success: false 
       });
+    }
+    
+    // Ensure mediaUrls is an array (backward compatibility)
+    if (!Array.isArray(mediaUrls)) {
+      mediaUrls = [];
     }
     
     // SECURITY 4: Check advanced rate limits (if user authenticated)
@@ -1604,7 +1647,7 @@ function handleSendSMS(e) {
       }
     }
     
-    // Send message using secure Twilio function
+    // Send message using secure Twilio function (SMS or MMS)
     const result = sendTwilioMessage(to, body, mediaUrls);
     
     // Log to SMS_Log sheet
@@ -1624,13 +1667,14 @@ function handleSendSMS(e) {
     });
     
     // Log audit event
-    logAuditEvent(userEmail, 'SMS_SENT', {
+    logAuditEvent(userEmail, mediaUrls.length > 0 ? 'MMS_SENT' : 'SMS_SENT', {
       to: to,
       messageLength: body.length,
       sid: result.sid,
       status: result.status,
       idempotencyKey: idempotencyKey || 'none',
-      hasMedia: !!(mediaUrls && mediaUrls.length)
+      hasMedia: !!(mediaUrls && mediaUrls.length),
+      mediaCount: mediaUrls.length
     });
     
     return jsonResponse({ 
@@ -1640,7 +1684,8 @@ function handleSendSMS(e) {
       to: result.to,
       from: result.from,
       numMedia: result.num_media || '0',
-      dateCreated: result.date_created
+      dateCreated: result.date_created,
+      messageType: mediaUrls.length > 0 ? 'MMS' : 'SMS'
     });
       
   } catch (error) {
@@ -1816,6 +1861,7 @@ function handleMakeCall(e) {
  * Handle File Upload API call
  * SECURED: Uses existing API_KEY for authentication, validates file type and size
  * Saves to Google Drive and returns public URL for MMS
+ * Phase 3.4: Configured for MMS media uploads
  */
 function handleUploadFile(e) {
   try {
@@ -1823,14 +1869,14 @@ function handleUploadFile(e) {
     validateApiKey(e);
     
     // Parse request parameters
-    let fileName, fileContent, mimeType;
+    let fileName, base64Data, mimeType;
     
     // Try POST body first
     if (e.postData && e.postData.contents) {
       try {
         const postData = JSON.parse(e.postData.contents);
         fileName = postData.fileName;
-        fileContent = postData.fileContent; // Base64 encoded
+        base64Data = postData.base64Data || postData.fileContent; // Support both parameter names
         mimeType = postData.mimeType;
       } catch (parseError) {
         Logger.log('Error parsing POST data: ' + parseError.toString());
@@ -1838,15 +1884,15 @@ function handleUploadFile(e) {
     }
     
     // Fallback to query parameters
-    if (!fileName || !fileContent || !mimeType) {
+    if (!fileName || !base64Data || !mimeType) {
       fileName = fileName || e.parameter.fileName;
-      fileContent = fileContent || e.parameter.fileContent;
+      base64Data = base64Data || e.parameter.base64Data || e.parameter.fileContent;
       mimeType = mimeType || e.parameter.mimeType;
     }
     
-    if (!fileName || !fileContent || !mimeType) {
+    if (!fileName || !base64Data || !mimeType) {
       return jsonResponse({ 
-        error: 'Missing required parameters: fileName, fileContent, mimeType',
+        error: 'Missing required parameters: fileName, base64Data (or fileContent), mimeType',
         success: false 
       });
     }
@@ -1873,7 +1919,7 @@ function handleUploadFile(e) {
     // SECURITY 3: Decode Base64 and check file size (max 5MB)
     let fileBytes;
     try {
-      fileBytes = Utilities.base64Decode(fileContent);
+      fileBytes = Utilities.base64Decode(base64Data);
     } catch (decodeError) {
       Logger.log('Error decoding Base64: ' + decodeError.toString());
       return jsonResponse({ 
@@ -1898,19 +1944,19 @@ function handleUploadFile(e) {
       });
     }
     
-    // Get upload folder from Script Properties
+    // Get upload folder from Script Properties (UPLOAD_FOLDER_ID)
     const props = PropertiesService.getScriptProperties();
     const folderId = props.getProperty('UPLOAD_FOLDER_ID');
     
     if (!folderId) {
       Logger.log('⚠️ UPLOAD_FOLDER_ID not configured in Script Properties');
       return jsonResponse({ 
-        error: 'Server configuration error: Upload folder not configured',
+        error: 'Server configuration error: Upload folder not configured. Run setupUploadFolder()',
         success: false 
       });
     }
     
-    // Get or create folder
+    // Get folder from Drive
     let folder;
     try {
       folder = DriveApp.getFolderById(folderId);
@@ -1926,15 +1972,15 @@ function handleUploadFile(e) {
     const blob = Utilities.newBlob(fileBytes, mimeType, fileName);
     const file = folder.createFile(blob);
     
-    // Make file publicly accessible
+    // Make file publicly accessible (required for Twilio MMS)
     file.setSharing(
       DriveApp.Access.ANYONE_WITH_LINK,
       DriveApp.Permission.VIEW
     );
     
-    // Get public URL
+    // Get Twilio-compatible public URL
     const fileId = file.getId();
-    const publicUrl = 'https://drive.google.com/uc?export=view&id=' + fileId;
+    const mediaUrl = 'https://drive.google.com/uc?export=download&id=' + fileId;
     
     // Log successful upload
     logAuditEvent('SYSTEM', 'FILE_UPLOADED', {
@@ -1942,14 +1988,14 @@ function handleUploadFile(e) {
       mimeType: mimeType,
       sizeBytes: fileSizeBytes,
       fileId: fileId,
-      url: publicUrl
+      mediaUrl: mediaUrl
     });
     
     Logger.log('✅ File uploaded successfully: ' + fileName + ' (' + (fileSizeBytes / 1024).toFixed(2) + 'KB)');
     
     return jsonResponse({ 
       success: true,
-      mediaUrl: publicUrl,
+      mediaUrl: mediaUrl,
       fileId: fileId,
       fileName: fileName,
       mimeType: mimeType,
