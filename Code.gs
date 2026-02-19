@@ -1004,6 +1004,8 @@ function doPost(e) {
           return handleSendSMS(e);
         case 'makeCall':
           return handleMakeCall(e);
+        case 'uploadFile':
+          return handleUploadFile(e);
         default:
           return jsonResponse({ error: 'Invalid action' });
       }
@@ -1811,6 +1813,170 @@ function handleMakeCall(e) {
 }
 
 /**
+ * Handle File Upload API call
+ * SECURED: Uses existing API_KEY for authentication, validates file type and size
+ * Saves to Google Drive and returns public URL for MMS
+ */
+function handleUploadFile(e) {
+  try {
+    // SECURITY 1: Validate API Key using existing API_KEY property
+    validateApiKey(e);
+    
+    // Parse request parameters
+    let fileName, fileContent, mimeType;
+    
+    // Try POST body first
+    if (e.postData && e.postData.contents) {
+      try {
+        const postData = JSON.parse(e.postData.contents);
+        fileName = postData.fileName;
+        fileContent = postData.fileContent; // Base64 encoded
+        mimeType = postData.mimeType;
+      } catch (parseError) {
+        Logger.log('Error parsing POST data: ' + parseError.toString());
+      }
+    }
+    
+    // Fallback to query parameters
+    if (!fileName || !fileContent || !mimeType) {
+      fileName = fileName || e.parameter.fileName;
+      fileContent = fileContent || e.parameter.fileContent;
+      mimeType = mimeType || e.parameter.mimeType;
+    }
+    
+    if (!fileName || !fileContent || !mimeType) {
+      return jsonResponse({ 
+        error: 'Missing required parameters: fileName, fileContent, mimeType',
+        success: false 
+      });
+    }
+    
+    // SECURITY 2: Validate MIME type (only allow images and PDFs)
+    const allowedMimeTypes = [
+      'image/jpeg',
+      'image/png',
+      'application/pdf'
+    ];
+    
+    if (!allowedMimeTypes.includes(mimeType)) {
+      logAuditEvent('SYSTEM', 'FILE_UPLOAD_REJECTED', { 
+        reason: 'Invalid MIME type',
+        mimeType: mimeType,
+        fileName: fileName
+      });
+      return jsonResponse({ 
+        error: 'Invalid file type. Only JPEG, PNG, and PDF files are allowed.',
+        success: false 
+      });
+    }
+    
+    // SECURITY 3: Decode Base64 and check file size (max 5MB)
+    let fileBytes;
+    try {
+      fileBytes = Utilities.base64Decode(fileContent);
+    } catch (decodeError) {
+      Logger.log('Error decoding Base64: ' + decodeError.toString());
+      return jsonResponse({ 
+        error: 'Invalid file content encoding. Must be Base64.',
+        success: false 
+      });
+    }
+    
+    const fileSizeBytes = fileBytes.length;
+    const maxSizeBytes = 5 * 1024 * 1024; // 5MB
+    
+    if (fileSizeBytes > maxSizeBytes) {
+      logAuditEvent('SYSTEM', 'FILE_UPLOAD_REJECTED', { 
+        reason: 'File too large',
+        sizeBytes: fileSizeBytes,
+        maxBytes: maxSizeBytes,
+        fileName: fileName
+      });
+      return jsonResponse({ 
+        error: 'File size exceeds 5MB limit. File size: ' + (fileSizeBytes / 1024 / 1024).toFixed(2) + 'MB',
+        success: false 
+      });
+    }
+    
+    // Get upload folder from Script Properties
+    const props = PropertiesService.getScriptProperties();
+    const folderId = props.getProperty('UPLOAD_FOLDER_ID');
+    
+    if (!folderId) {
+      Logger.log('⚠️ UPLOAD_FOLDER_ID not configured in Script Properties');
+      return jsonResponse({ 
+        error: 'Server configuration error: Upload folder not configured',
+        success: false 
+      });
+    }
+    
+    // Get or create folder
+    let folder;
+    try {
+      folder = DriveApp.getFolderById(folderId);
+    } catch (folderError) {
+      Logger.log('Error accessing upload folder: ' + folderError.toString());
+      return jsonResponse({ 
+        error: 'Server configuration error: Invalid upload folder ID',
+        success: false 
+      });
+    }
+    
+    // Create blob and save file to Drive
+    const blob = Utilities.newBlob(fileBytes, mimeType, fileName);
+    const file = folder.createFile(blob);
+    
+    // Make file publicly accessible
+    file.setSharing(
+      DriveApp.Access.ANYONE_WITH_LINK,
+      DriveApp.Permission.VIEW
+    );
+    
+    // Get public URL
+    const fileId = file.getId();
+    const publicUrl = 'https://drive.google.com/uc?export=view&id=' + fileId;
+    
+    // Log successful upload
+    logAuditEvent('SYSTEM', 'FILE_UPLOADED', {
+      fileName: fileName,
+      mimeType: mimeType,
+      sizeBytes: fileSizeBytes,
+      fileId: fileId,
+      url: publicUrl
+    });
+    
+    Logger.log('✅ File uploaded successfully: ' + fileName + ' (' + (fileSizeBytes / 1024).toFixed(2) + 'KB)');
+    
+    return jsonResponse({ 
+      success: true,
+      mediaUrl: publicUrl,
+      fileId: fileId,
+      fileName: fileName,
+      mimeType: mimeType,
+      sizeBytes: fileSizeBytes
+    });
+      
+  } catch (error) {
+    const errorMessage = error.toString();
+    Logger.log('Error in handleUploadFile: ' + errorMessage);
+    
+    // Check if it's an unauthorized error
+    if (errorMessage.includes('Unauthorized')) {
+      return jsonResponse({ 
+        error: 'Unauthorized: Invalid API Key',
+        success: false 
+      });
+    }
+    
+    logAuditEvent('SYSTEM', 'FILE_UPLOAD_FAILED', { error: errorMessage });
+    return jsonResponse({ 
+      error: 'Failed to upload file: ' + errorMessage, 
+      success: false 
+    });
+  }
+}
+
+/**
  * Log to sheet helper function
  * Enhanced with security audit fields
  */
@@ -2127,6 +2293,52 @@ function generateNewAPIKey() {
 }
 
 /**
+ * Admin function: Create and configure upload folder in Google Drive
+ */
+function setupUploadFolder() {
+  try {
+    // Create folder in My Drive
+    const folderName = 'GPBC_MMS_Uploads';
+    const folder = DriveApp.createFolder(folderName);
+    const folderId = folder.getId();
+    
+    // Store folder ID in Script Properties
+    PropertiesService.getScriptProperties().setProperty('UPLOAD_FOLDER_ID', folderId);
+    
+    Logger.log('========================================');
+    Logger.log('📁 UPLOAD FOLDER CREATED');
+    Logger.log('========================================');
+    Logger.log('Folder Name: ' + folderName);
+    Logger.log('Folder ID: ' + folderId);
+    Logger.log('Folder URL: ' + folder.getUrl());
+    Logger.log('\n✅ UPLOAD_FOLDER_ID has been saved to Script Properties');
+    Logger.log('\n📋 Folder Configuration:');
+    Logger.log('- Location: My Drive/' + folderName);
+    Logger.log('- Uploaded files will be publicly accessible via link');
+    Logger.log('- Supported file types: JPEG, PNG, PDF');
+    Logger.log('- Maximum file size: 5MB');
+    Logger.log('========================================');
+    
+    logAuditEvent('ADMIN', 'UPLOAD_FOLDER_CREATED', { 
+      folderId: folderId,
+      folderName: folderName 
+    });
+    
+    return {
+      success: true,
+      folderId: folderId,
+      folderUrl: folder.getUrl()
+    };
+  } catch (error) {
+    Logger.log('❌ Error creating upload folder: ' + error.toString());
+    return {
+      success: false,
+      error: error.toString()
+    };
+  }
+}
+
+/**
  * Admin function: View current security configuration
  */
 function viewSecurityConfig() {
@@ -2141,12 +2353,14 @@ function viewSecurityConfig() {
   const twilioSid = props.getProperty('TWILIO_SID');
   const twilioAuth = props.getProperty('TWILIO_AUTH');
   const twilioFrom = props.getProperty('TWILIO_FROM');
+  const uploadFolderId = props.getProperty('UPLOAD_FOLDER_ID');
   
   Logger.log('JWT Secret: ' + (jwtSecret ? '✅ Configured' : '❌ Missing'));
   Logger.log('API Key (Messaging & Read): ' + (apiKey ? '✅ Configured' : '❌ Missing'));
   Logger.log('Twilio SID: ' + (twilioSid ? '✅ Configured' : '❌ Missing'));
   Logger.log('Twilio Auth Token: ' + (twilioAuth ? '✅ Configured' : '❌ Missing'));
   Logger.log('Twilio Phone: ' + (twilioFrom ? '✅ Configured (' + twilioFrom + ')' : '❌ Missing'));
+  Logger.log('Upload Folder ID: ' + (uploadFolderId ? '✅ Configured' : '❌ Missing'));
   
   Logger.log('\n📊 Security Features:');
   Logger.log('✅ API Key authentication');
@@ -2156,6 +2370,7 @@ function viewSecurityConfig() {
   Logger.log('✅ User rate limiting (100 SMS/hour, 50 calls/hour)');
   Logger.log('✅ System rate limiting (30 SMS/min, 20 calls/min)');
   Logger.log('✅ Twilio webhook validation');
+  Logger.log('✅ File upload with type/size validation');
   Logger.log('✅ Audit logging');
   Logger.log('✅ Account lockout protection');
   
@@ -2166,12 +2381,20 @@ function viewSecurityConfig() {
   if (!twilioAuth) {
     Logger.log('❗ Configure Twilio credentials for SMS/Call functionality');
   }
+  if (!uploadFolderId) {
+    Logger.log('❗ Configure UPLOAD_FOLDER_ID in Script Properties for file uploads');
+  }
+  }
+  if (!twilioAuth) {
+    Logger.log('❗ Configure Twilio credentials for SMS/Call functionality');
+  }
   
   Logger.log('========================================');
   
   return {
     jwtSecret: !!jwtSecret,
     apiKey: !!apiKey,
+    uploadFolderId: !!uploadFolderId,
     twilioConfigured: !!(twilioSid && twilioAuth && twilioFrom)
   };
 }
