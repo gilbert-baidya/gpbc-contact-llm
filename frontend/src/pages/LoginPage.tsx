@@ -50,10 +50,28 @@ export const LoginPage: React.FC = () => {
           <div className="inline-flex items-center justify-center mb-3">
             <img 
               src="/gpbc-church-contact.png" 
-              alt="GPBC Contact System Logo" 
-              className="w-96 h-96 object-contain"
+              alt="Grace and Praise Bangladeshi Church" 
+              style={{
+                height: '140px',
+                width: 'auto',
+                marginBottom: '12px',
+                objectFit: 'contain',
+                filter: 'drop-shadow(0 0 14px rgba(255, 215, 0, 0.25))'
+              }}
               loading="eager"
             />
+          </div>
+          <div 
+            style={{
+              fontSize: '20px',
+              fontWeight: 600,
+              color: '#F5D98F',
+              letterSpacing: '0.4px',
+              marginBottom: '6px',
+              textAlign: 'center'
+            }}
+          >
+            Grace and Praise Bangladeshi Church
           </div>
           <h1 className="text-3xl font-bold text-white mb-2">GPBC Contact System</h1>
           <p className="text-gray-400">Sign in to access the dashboard</p>
