@@ -49,9 +49,10 @@ export const LoginPage: React.FC = () => {
         <div className="text-center mb-4">
           <div className="inline-flex items-center justify-center mb-3">
             <img 
-              src="/image/gpbc-church-contact.png" 
-              alt="GPBC Logo" 
+              src="/gpbc-church-contact.png" 
+              alt="GPBC Contact System Logo" 
               className="w-96 h-96 object-contain"
+              loading="eager"
             />
           </div>
           <h1 className="text-3xl font-bold text-white mb-2">GPBC Contact System</h1>
