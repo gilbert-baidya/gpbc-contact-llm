@@ -7,7 +7,7 @@
 // Configuration from environment variables
 const GOOGLE_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SCRIPT_URL || '';
 const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || '';
-const TEST_PHONE = import.meta.env.VITE_TEST_PHONE || '';
+export const TEST_PHONE = import.meta.env.VITE_TEST_PHONE || '';
 
 // Debug logging
 console.log('🌍 Environment:', import.meta.env.MODE);

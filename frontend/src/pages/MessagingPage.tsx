@@ -2,14 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { MessageSquare, Send, Phone, Loader, UserPlus, X, Sparkles, Wand2, Info, AlertTriangle, Eraser, DollarSign } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { fetchContacts, bulkSendSMS, bulkMakeCall, Contact, sendSMS } from '../services/googleAppsScriptService';
+import { fetchContacts, bulkMakeCall, Contact, sendSMS } from '../services/googleAppsScriptService';
 import { llmApi, getBackendInfo } from '../api/llmBackend';
 import { FileUpload } from '../components/FileUpload';
 import { 
   addCost, 
   getCostSummary, 
-  checkBudgetWarning, 
-  getBudgetStatus,
+  checkBudgetWarning,
   WEEKLY_BUDGET,
   MONTHLY_BUDGET,
   YEARLY_BUDGET,
@@ -39,7 +38,7 @@ export const MessagingPage: React.FC = () => {
   const [budgetWarningData, setBudgetWarningData] = useState<any>(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [expandPreview, setExpandPreview] = useState(false);
-  const [undoTimer, setUndoTimer] = useState<NodeJS.Timeout | null>(null);
+  const [undoTimer, setUndoTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
   const [undoCountdown, setUndoCountdown] = useState<number>(0);
   const [isUndoPending, setIsUndoPending] = useState(false);
 
