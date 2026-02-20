@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Lock, Mail, Eye, EyeOff, Church } from 'lucide-react';
+import { Lock, Mail, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export const LoginPage: React.FC = () => {
@@ -43,31 +43,35 @@ export const LoginPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50 via-white to-blue-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
       <div className="max-w-md w-full">
         {/* Logo & Header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl shadow-lg mb-4">
-            <Church className="w-10 h-10 text-white" />
+        <div className="text-center mb-4">
+          <div className="inline-flex items-center justify-center mb-3">
+            <img 
+              src="/image/gpbc-church-contact.png" 
+              alt="GPBC Logo" 
+              className="w-96 h-96 object-contain"
+            />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Church Contact System</h1>
-          <p className="text-gray-600">Sign in to access the dashboard</p>
+          <h1 className="text-3xl font-bold text-white mb-2">GPBC Contact System</h1>
+          <p className="text-gray-400">Sign in to access the dashboard</p>
         </div>
 
         {/* Login Card */}
-        <div className="card shadow-xl border-2 border-gray-100">
+        <div className="bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 p-8">
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Email Field */}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">
+              <label className="block text-sm font-semibold text-gray-300 mb-2">
                 Email Address
               </label>
               <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
                 <input
                   type="email"
-                  className="input pl-10 w-full"
-                  placeholder="your.email@gpbc.org"
+                  className="w-full pl-10 pr-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
+                  placeholder="admin@gracepraise.church"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   disabled={isLoading}
@@ -78,14 +82,14 @@ export const LoginPage: React.FC = () => {
 
             {/* Password Field */}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">
+              <label className="block text-sm font-semibold text-gray-300 mb-2">
                 Password
               </label>
               <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
                 <input
                   type={showPassword ? 'text' : 'password'}
-                  className="input pl-10 pr-10 w-full"
+                  className="w-full pl-10 pr-10 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
                   placeholder="Enter your password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -94,7 +98,7 @@ export const LoginPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
                 >
                   {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
@@ -105,7 +109,7 @@ export const LoginPage: React.FC = () => {
             <button
               type="submit"
               disabled={isLoading}
-              className="btn bg-gradient-to-r from-primary-600 to-primary-700 text-white hover:from-primary-700 hover:to-primary-800 w-full py-3 shadow-lg flex items-center justify-center gap-2"
+              className="w-full py-3 bg-gradient-to-r from-primary-600 to-primary-700 hover:from-primary-700 hover:to-primary-800 text-white font-semibold rounded-lg shadow-lg transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isLoading ? (
                 <>
@@ -122,13 +126,13 @@ export const LoginPage: React.FC = () => {
           </form>
 
           {/* Login Hints */}
-          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-xs font-semibold text-blue-900 mb-2">🔑 Default Admin Login:</p>
-            <div className="space-y-1 text-xs text-blue-700">
-              <p>Email: <code className="bg-blue-100 px-2 py-0.5 rounded">admin@gpbc.org</code></p>
-              <p>Password: <code className="bg-blue-100 px-2 py-0.5 rounded">Admin123!</code></p>
+          <div className="mt-6 p-4 bg-gray-900 border border-gray-700 rounded-lg">
+            <p className="text-xs font-semibold text-yellow-400 mb-2">🔑 Default Admin Login:</p>
+            <div className="space-y-1 text-xs text-gray-300">
+              <p>Email: <code className="bg-gray-800 px-2 py-0.5 rounded text-yellow-300">admin@gpbc.org</code></p>
+              <p>Password: <code className="bg-gray-800 px-2 py-0.5 rounded text-yellow-300">Admin123!</code></p>
             </div>
-            <p className="mt-2 text-[10px] text-blue-600 italic">
+            <p className="mt-2 text-[10px] text-gray-500 italic">
               * Change default password after first login
             </p>
           </div>

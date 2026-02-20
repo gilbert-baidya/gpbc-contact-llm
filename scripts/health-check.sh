@@ -3,7 +3,7 @@
 # Health check script
 
 echo "================================================"
-echo "Church Contact System - Health Check"
+echo "GPBC Contact System - Health Check"
 echo "================================================"
 echo ""
 

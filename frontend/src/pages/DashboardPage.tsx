@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchStats, getMessageHistory, Stats, Message } from '../services/googleAppsScriptService';
-import { BarChart3, Users, MessageSquare, Phone, Calendar } from 'lucide-react';
+import { fetchStats, getMessageHistory, getBillingSummary, getDeliveryStats, Stats, Message, BillingSummary, DeliveryStats } from '../services/googleAppsScriptService';
+import { BarChart3, Users, MessageSquare, Phone, Calendar, DollarSign, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { WEEKLY_BUDGET, MONTHLY_BUDGET, YEARLY_BUDGET } from '../services/costTracker';
 
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
@@ -9,6 +10,8 @@ export const DashboardPage: React.FC = () => {
   const [statsError, setStatsError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [recentMessages, setRecentMessages] = useState<Message[]>([]);
+  const [costSummary, setCostSummary] = useState<BillingSummary | null>(null);
+  const [deliveryStats, setDeliveryStats] = useState<DeliveryStats | null>(null);
 
   // Load stats from Google Apps Script on mount
   useEffect(() => {
@@ -31,6 +34,39 @@ export const DashboardPage: React.FC = () => {
     };
 
     loadStats();
+    
+    // Load cost summary from server (Google Sheets)
+    const loadCostSummary = async () => {
+      try {
+        const billing = await getBillingSummary();
+        setCostSummary(billing);
+      } catch (error) {
+        console.error('Failed to load billing summary:', error);
+        // Fail silently - cost tracking is not critical for dashboard display
+      }
+    };
+    
+    // Load delivery statistics
+    const loadDeliveryStats = async () => {
+      try {
+        const delivery = await getDeliveryStats();
+        setDeliveryStats(delivery);
+      } catch (error) {
+        console.error('Failed to load delivery stats:', error);
+        // Fail silently
+      }
+    };
+    
+    loadCostSummary();
+    loadDeliveryStats();
+    
+    // Update summaries every 30 seconds
+    const interval = setInterval(() => {
+      loadCostSummary();
+      loadDeliveryStats();
+    }, 30000);
+    
+    return () => clearInterval(interval);
   }, []);
 
   return (
@@ -75,6 +111,206 @@ export const DashboardPage: React.FC = () => {
               <p className="text-3xl font-bold text-orange-600">{recentMessages.filter(m => m.type === 'call').length}</p>
             </div>
           </div>
+          
+          {/* Messaging Cost Summary Card */}
+          {costSummary && (
+            <div className="card bg-gradient-to-br from-green-50 to-emerald-50 border border-green-200">
+              <div className="flex items-center gap-2 mb-4">
+                <DollarSign className="w-6 h-6 text-green-700" />
+                <h2 className="text-xl font-bold text-gray-900">Messaging Cost Summary</h2>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-white rounded-lg p-4 border border-green-200">
+                  <h3 className="text-xs font-semibold text-gray-600 mb-1">Weekly Cost</h3>
+                  <p className={`text-2xl font-bold ${
+                    costSummary.weeklyCost > WEEKLY_BUDGET 
+                      ? 'text-red-600' 
+                      : costSummary.weeklyCost > WEEKLY_BUDGET * 0.8
+                        ? 'text-orange-600'
+                        : 'text-green-600'
+                  }`}>
+                    ${costSummary.weeklyCost.toFixed(2)}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    of ${WEEKLY_BUDGET} budget
+                  </p>
+                  <div className="mt-2 bg-gray-200 rounded-full h-2 overflow-hidden">
+                    <div 
+                      className={`h-full ${
+                        costSummary.weeklyCost > WEEKLY_BUDGET 
+                          ? 'bg-red-600' 
+                          : costSummary.weeklyCost > WEEKLY_BUDGET * 0.8
+                            ? 'bg-orange-600'
+                            : 'bg-green-600'
+                      }`}
+                      style={{ width: `${Math.min((costSummary.weeklyCost / WEEKLY_BUDGET) * 100, 100)}%` }}
+                    />
+                  </div>
+                </div>
+                
+                <div className="bg-white rounded-lg p-4 border border-green-200">
+                  <h3 className="text-xs font-semibold text-gray-600 mb-1">Monthly Cost</h3>
+                  <p className={`text-2xl font-bold ${
+                    costSummary.monthlyCost > MONTHLY_BUDGET 
+                      ? 'text-red-600' 
+                      : costSummary.monthlyCost > MONTHLY_BUDGET * 0.8
+                        ? 'text-orange-600'
+                        : 'text-green-600'
+                  }`}>
+                    ${costSummary.monthlyCost.toFixed(2)}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    of ${MONTHLY_BUDGET} budget
+                  </p>
+                  <div className="mt-2 bg-gray-200 rounded-full h-2 overflow-hidden">
+                    <div 
+                      className={`h-full ${
+                        costSummary.monthlyCost > MONTHLY_BUDGET 
+                          ? 'bg-red-600' 
+                          : costSummary.monthlyCost > MONTHLY_BUDGET * 0.8
+                            ? 'bg-orange-600'
+                            : 'bg-green-600'
+                      }`}
+                      style={{ width: `${Math.min((costSummary.monthlyCost / MONTHLY_BUDGET) * 100, 100)}%` }}
+                    />
+                  </div>
+                </div>
+                
+                <div className="bg-white rounded-lg p-4 border border-green-200">
+                  <h3 className="text-xs font-semibold text-gray-600 mb-1">Yearly Cost</h3>
+                  <p className={`text-2xl font-bold ${
+                    costSummary.yearlyCost > YEARLY_BUDGET 
+                      ? 'text-red-600' 
+                      : costSummary.yearlyCost > YEARLY_BUDGET * 0.8
+                        ? 'text-orange-600'
+                        : 'text-green-600'
+                  }`}>
+                    ${costSummary.yearlyCost.toFixed(2)}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    of ${YEARLY_BUDGET} budget
+                  </p>
+                  <div className="mt-2 bg-gray-200 rounded-full h-2 overflow-hidden">
+                    <div 
+                      className={`h-full ${
+                        costSummary.yearlyCost > YEARLY_BUDGET 
+                          ? 'bg-red-600' 
+                          : costSummary.yearlyCost > YEARLY_BUDGET * 0.8
+                            ? 'bg-orange-600'
+                            : 'bg-green-600'
+                      }`}
+                      style={{ width: `${Math.min((costSummary.yearlyCost / YEARLY_BUDGET) * 100, 100)}%` }}
+                    />
+                  </div>
+                </div>
+                
+                <div className="bg-white rounded-lg p-4 border border-green-200">
+                  <h3 className="text-xs font-semibold text-gray-600 mb-1">Lifetime Cost</h3>
+                  <p className="text-2xl font-bold text-blue-600">
+                    ${costSummary.lifetimeCost.toFixed(2)}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Total all-time spending
+                  </p>
+                  <div className="mt-2 h-2"></div>
+                </div>
+              </div>
+              
+              <div className="mt-4 bg-white rounded-lg p-3 border border-green-200">
+                <p className="text-sm text-gray-600">
+                  💡 <span className="font-medium">Tip:</span> Budgets reset automatically (weekly on Sundays, monthly on the 1st, yearly on Jan 1st)
+                </p>
+              </div>
+            </div>
+          )}
+          
+          {/* Delivery Statistics Card - PART 8 */}
+          {deliveryStats && (
+            <div className="card bg-gradient-to-br from-blue-50 to-cyan-50 border border-blue-200">
+              <div className="flex items-center gap-2 mb-4">
+                <CheckCircle className="w-6 h-6 text-blue-700" />
+                <h2 className="text-xl font-bold text-gray-900">Message Delivery Statistics</h2>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="bg-white rounded-lg p-4 border border-blue-200">
+                  <h3 className="text-xs font-semibold text-gray-600 mb-1">Success Rate</h3>
+                  <p className={`text-3xl font-bold ${
+                    deliveryStats.successRate >= 90 
+                      ? 'text-green-600' 
+                      : deliveryStats.successRate >= 70
+                        ? 'text-orange-600'
+                        : 'text-red-600'
+                  }`}>
+                    {deliveryStats.successRate.toFixed(1)}%
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {deliveryStats.delivered} of {deliveryStats.totalMessages} delivered
+                  </p>
+                </div>
+                
+                <div className="bg-white rounded-lg p-4 border border-blue-200">
+                  <h3 className="text-xs font-semibold text-gray-600 mb-1">
+                    <CheckCircle className="w-4 h-4 inline mr-1 text-green-600" />
+                    Delivered
+                  </h3>
+                  <p className="text-2xl font-bold text-green-600">
+                    {deliveryStats.delivered}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Successfully delivered
+                  </p>
+                </div>
+                
+                <div className="bg-white rounded-lg p-4 border border-blue-200">
+                  <h3 className="text-xs font-semibold text-gray-600 mb-1">
+                    <Clock className="w-4 h-4 inline mr-1 text-blue-600" />
+                    Sent/Queued
+                  </h3>
+                  <p className="text-2xl font-bold text-blue-600">
+                    {deliveryStats.sent + deliveryStats.queued}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    In progress
+                  </p>
+                </div>
+                
+                <div className="bg-white rounded-lg p-4 border border-blue-200">
+                  <h3 className="text-xs font-semibold text-gray-600 mb-1">
+                    <XCircle className="w-4 h-4 inline mr-1 text-red-600" />
+                    Failed
+                  </h3>
+                  <p className="text-2xl font-bold text-red-600">
+                    {deliveryStats.failed}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Failed to deliver
+                  </p>
+                </div>
+                
+                <div className="bg-white rounded-lg p-4 border border-blue-200">
+                  <h3 className="text-xs font-semibold text-gray-600 mb-1">Total Messages</h3>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {deliveryStats.totalMessages}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    All tracked messages
+                  </p>
+                </div>
+                
+                <div className="bg-white rounded-lg p-4 border border-blue-200">
+                  <h3 className="text-xs font-semibold text-gray-600 mb-1">Undelivered</h3>
+                  <p className="text-2xl font-bold text-orange-600">
+                    {deliveryStats.undelivered}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Not delivered
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
           
           {/* Group Statistics */}
           <div className="card">

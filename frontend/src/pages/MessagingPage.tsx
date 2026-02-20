@@ -1,9 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { MessageSquare, Send, Phone, Loader, UserPlus, X, Sparkles, Wand2, Info, AlertTriangle, Eraser } from 'lucide-react';
+import { MessageSquare, Send, Phone, Loader, UserPlus, X, Sparkles, Wand2, Info, AlertTriangle, Eraser, DollarSign } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { fetchContacts, bulkSendSMS, bulkMakeCall, Contact } from '../services/googleAppsScriptService';
+import { fetchContacts, bulkSendSMS, bulkMakeCall, Contact, sendSMS } from '../services/googleAppsScriptService';
 import { llmApi, getBackendInfo } from '../api/llmBackend';
+import { FileUpload } from '../components/FileUpload';
+import { 
+  addCost, 
+  getCostSummary, 
+  checkBudgetWarning, 
+  getBudgetStatus,
+  WEEKLY_BUDGET,
+  MONTHLY_BUDGET,
+  YEARLY_BUDGET,
+  type CostTrackerData
+} from '../services/costTracker';
 
 export const MessagingPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -22,6 +33,20 @@ export const MessagingPage: React.FC = () => {
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [showSmsInfo, setShowSmsInfo] = useState(false);
+  const [mediaUrls, setMediaUrls] = useState<string[]>([]);
+  const [costSummary, setCostSummary] = useState<CostTrackerData | null>(null);
+  const [showBudgetWarning, setShowBudgetWarning] = useState(false);
+  const [budgetWarningData, setBudgetWarningData] = useState<any>(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [expandPreview, setExpandPreview] = useState(false);
+  const [undoTimer, setUndoTimer] = useState<NodeJS.Timeout | null>(null);
+  const [undoCountdown, setUndoCountdown] = useState<number>(0);
+  const [isUndoPending, setIsUndoPending] = useState(false);
+
+  // Twilio USA Pricing Constants
+  const SMS_COST_GSM = 0.0083;      // GSM-7 per segment
+  const SMS_COST_UNICODE = 0.0166;  // Unicode per segment
+  const MMS_COST = 0.02;            // Flat per message
 
   // SMS Text Sanitizer - Converts Unicode to GSM-safe ASCII
   const sanitizeSmsText = (text: string): string => {
@@ -194,6 +219,39 @@ export const MessagingPage: React.FC = () => {
   const smsInfo = calculateSmsInfo(messageContent);
   const unicodeIssues = messageType === 'sms' ? detectUnicodeIssues(messageContent) : { hasIssues: false, issues: [] };
 
+  // Detect MMS mode
+  const isMMS = messageType === 'sms' && mediaUrls && mediaUrls.length > 0;
+
+  // Calculate total estimated cost with proper breakdown
+  const recipientsCount = sendToAll ? allContacts.length : selectedContacts.length;
+  
+  const calculateCostBreakdown = () => {
+    let messageType = 'SMS';
+    let perRecipient = 0;
+
+    if (isMMS) {
+      messageType = 'MMS';
+      perRecipient = MMS_COST;
+    } else {
+      // SMS: differentiate GSM-7 vs Unicode pricing
+      const costPerSegment = smsInfo.isUnicode ? SMS_COST_UNICODE : SMS_COST_GSM;
+      perRecipient = smsInfo.segments * costPerSegment;
+      messageType = smsInfo.isUnicode ? 'SMS (Unicode)' : 'SMS (GSM-7)';
+    }
+
+    const totalCost = perRecipient * recipientsCount;
+
+    return {
+      perRecipient,
+      totalRecipients: recipientsCount,
+      totalCost,
+      messageType
+    };
+  };
+
+  const costBreakdown = calculateCostBreakdown();
+  const estimatedCost = costBreakdown.totalCost;
+
   // Handler to clean text
   const handleCleanText = () => {
     const cleaned = sanitizeSmsText(messageContent);
@@ -207,7 +265,24 @@ export const MessagingPage: React.FC = () => {
 
   useEffect(() => {
     loadContacts();
-  }, []);
+    
+    // Load cost summary
+    setCostSummary(getCostSummary());
+    
+    // Update cost summary every 10 seconds
+    const interval = setInterval(() => {
+      setCostSummary(getCostSummary());
+    }, 10000);
+    
+    // Cleanup function
+    return () => {
+      clearInterval(interval);
+      // Clear undo timer if component unmounts
+      if (undoTimer) {
+        clearInterval(undoTimer);
+      }
+    };
+  }, [undoTimer]);
 
   useEffect(() => {
     checkPreSelectedContacts();
@@ -256,11 +331,117 @@ export const MessagingPage: React.FC = () => {
       return;
     }
 
-    setIsSending(true);
-    setProgress({ sent: 0, total: targets.length });
+    // Show confirmation modal first
+    setShowConfirmModal(true);
+  };
 
+  const handleConfirmSend = async () => {
+    setShowConfirmModal(false);
+    
+    // Check budget warning after confirmation
+    const budgetCheck = checkBudgetWarning(estimatedCost);
+    if (budgetCheck.hasWarning) {
+      setBudgetWarningData(budgetCheck);
+      setShowBudgetWarning(true);
+      return; // Wait for user confirmation
+    }
+
+    // Start 10-second undo grace period
+    startUndoTimer();
+  };
+
+  const startUndoTimer = () => {
+    // Clear any existing timer
+    if (undoTimer) {
+      clearInterval(undoTimer);
+    }
+
+    setIsUndoPending(true);
+    setUndoCountdown(10);
+
+    // Show toast with undo option
+    toast.loading(
+      (t) => (
+        <div className="flex items-center gap-3">
+          <span>Sending in {undoCountdown}s...</span>
+          <button
+            onClick={() => {
+              handleUndo();
+              toast.dismiss(t.id);
+            }}
+            className="px-3 py-1 bg-white text-red-600 rounded font-medium hover:bg-red-50 border border-red-200 transition-colors"
+          >
+            Undo
+          </button>
+        </div>
+      ),
+      { id: 'undo-timer', duration: Infinity }
+    );
+
+    // Countdown timer
+    let countdown = 10;
+    const timer = setInterval(() => {
+      countdown -= 1;
+      setUndoCountdown(countdown);
+
+      if (countdown <= 0) {
+        clearInterval(timer);
+        setUndoTimer(null);
+        setIsUndoPending(false);
+        toast.dismiss('undo-timer');
+        // Proceed with send
+        executeSend();
+      } else {
+        // Update toast message
+        toast.loading(
+          (t) => (
+            <div className="flex items-center gap-3">
+              <span>Sending in {countdown}s...</span>
+              <button
+                onClick={() => {
+                  handleUndo();
+                  toast.dismiss(t.id);
+                }}
+                className="px-3 py-1 bg-white text-red-600 rounded font-medium hover:bg-red-50 border border-red-200 transition-colors"
+              >
+                Undo
+              </button>
+            </div>
+          ),
+          { id: 'undo-timer', duration: Infinity }
+        );
+      }
+    }, 1000);
+
+    setUndoTimer(timer);
+  };
+
+  const handleUndo = () => {
+    // Clear the timer
+    if (undoTimer) {
+      clearInterval(undoTimer);
+      setUndoTimer(null);
+    }
+
+    setIsUndoPending(false);
+    setUndoCountdown(0);
+    toast.dismiss('undo-timer');
+    toast.success('Send cancelled', { duration: 2000 });
+  };
+
+  const executeSend = async () => {
+    setShowBudgetWarning(false);
+    setIsSending(true);
+    setProgress({ sent: 0, total: (sendToAll ? allContacts : selectedContacts).length });
+    
+    const targets = sendToAll ? allContacts : selectedContacts;
+    let successCount = 0;
+    
     try {
       if (messageType === 'sms') {
+        // Check if this is an MMS (has media attachments)
+        const isMMS = mediaUrls.length > 0;
+        
         // If AI personalization is enabled, personalize each message
         if (useAIPersonalization) {
           toast.loading('✨ Personalizing messages...', { id: 'personalizing' });
@@ -289,10 +470,11 @@ export const MessagingPage: React.FC = () => {
 
               console.log(`Personalizing for ${contact.name}: "${messageContent}" → "${personalizedMsg}"`);
 
-              // Send personalized message (sanitize for SMS)
+              // Send personalized message (sanitize for SMS, include media for MMS)
               const finalMsg = sanitizeSmsText(personalizedMsg);
-              await bulkSendSMS([contact], finalMsg);
+              await sendSMS(contact.phone, finalMsg, undefined, isMMS ? mediaUrls : undefined);
               sent++;
+              successCount++;
               setProgress({ sent, total: targets.length });
               
               // Small delay to avoid rate limits
@@ -301,12 +483,13 @@ export const MessagingPage: React.FC = () => {
               console.error(`Failed to personalize for ${contact.name}:`, error);
               // Fallback to original message (sanitized)
               const fallbackMsg = sanitizeSmsText(messageContent);
-              await bulkSendSMS([contact], fallbackMsg);
+              await sendSMS(contact.phone, fallbackMsg, undefined, isMMS ? mediaUrls : undefined);
               sent++;
+              successCount++;
               setProgress({ sent, total: targets.length });
             }
           }
-          toast.success(`✨ ${sent} personalized messages sent!`, { id: 'personalizing' });
+          toast.success(`✨ ${sent} personalized ${isMMS ? 'MMS' : 'SMS'} messages sent!`, { id: 'personalizing' });
         } else {
           // Send same message to everyone
           const onProgress = (sent: number) => {
@@ -314,12 +497,22 @@ export const MessagingPage: React.FC = () => {
           };
           // Sanitize message before sending for SMS
           const finalMessage = messageType === 'sms' ? sanitizeSmsText(messageContent) : messageContent;
-          await bulkSendSMS(targets, finalMessage, onProgress);
+          
+          // Send to each contact (with media URLs if MMS)
+          let sent = 0;
+          for (const contact of targets) {
+            await sendSMS(contact.phone, finalMessage, undefined, isMMS ? mediaUrls : undefined);
+            sent++;
+            successCount++;
+            onProgress(sent);
+            // Small delay to avoid rate limits
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
           
           if (finalMessage !== messageContent) {
-            toast.success(`SMS cleaned and sent to ${targets.length} contact(s)`);
+            toast.success(`${isMMS ? 'MMS' : 'SMS'} cleaned and sent to ${targets.length} contact(s)`);
           } else {
-            toast.success(`SMS sent to ${targets.length} contact(s)`);
+            toast.success(`${isMMS ? 'MMS' : 'SMS'} sent to ${targets.length} contact(s)`);
           }
         }
       } else {
@@ -334,11 +527,86 @@ export const MessagingPage: React.FC = () => {
       setSelectedContacts([]);
       setSendToAll(false);
       setUseAIPersonalization(false);
+      setMediaUrls([]);
+      
+      // Track cost only for successful sends
+      if (successCount > 0 && messageType === 'sms') {
+        const actualCost = costBreakdown.perRecipient * successCount;
+        addCost(actualCost);
+        setCostSummary(getCostSummary());
+        console.log(`Cost tracked: $${actualCost.toFixed(4)} for ${successCount} messages`);
+      }
     } catch (error: any) {
       toast.error(error.message || 'Failed to send messages');
     } finally {
       setIsSending(false);
       setProgress({ sent: 0, total: 0 });
+    }
+  };
+
+  const handleSendTest = async () => {
+    if (!messageContent.trim()) {
+      toast.error('Please enter a message');
+      return;
+    }
+
+    // Get test phone number from environment variable
+    const testPhone = import.meta.env.VITE_TEST_PHONE;
+    
+    if (!testPhone) {
+      toast.error('Test phone number not configured. Set VITE_TEST_PHONE in .env');
+      alert('TEST PHONE not configured');
+      return;
+    }
+
+    // Calculate test message cost
+    const isMMS = mediaUrls.length > 0;
+    const testCost = isMMS ? MMS_COST : (smsInfo.segments * (smsInfo.isUnicode ? SMS_COST_UNICODE : SMS_COST_GSM));
+
+    // Check budget warning before sending test
+    const budgetCheck = checkBudgetWarning(testCost);
+    if (budgetCheck.hasWarning) {
+      const proceed = window.confirm(
+        `Budget Warning: ${budgetCheck.message}\n\n` +
+        `${budgetCheck.type.charAt(0).toUpperCase() + budgetCheck.type.slice(1)} Budget: $${budgetCheck.budget.toFixed(2)}\n` +
+        `Current: $${budgetCheck.currentCost.toFixed(2)}\n` +
+        `Test Message: $${testCost.toFixed(4)}\n` +
+        `New Total: $${budgetCheck.newTotal.toFixed(2)}\n\n` +
+        `Send test message anyway?`
+      );
+      if (!proceed) {
+        return;
+      }
+    }
+
+    // Safety logging - confirm test recipient
+    console.log('🧪 Sending TEST message to:', testPhone);
+    console.log('📝 Message length:', messageContent.length, 'chars');
+    console.log('📎 Attachments:', mediaUrls.length);
+    console.log('💰 Test cost:', `$${testCost.toFixed(4)}`);
+
+    setIsSending(true);
+    
+    try {
+      const finalMessage = sanitizeSmsText(messageContent);
+      
+      // Safety check - ensure we're only sending to test phone
+      console.log('✅ SAFETY CHECK: Test recipient confirmed as', testPhone);
+      
+      // Send test message (with media URLs if MMS)
+      await sendSMS(testPhone, finalMessage, undefined, isMMS ? mediaUrls : undefined);
+      
+      // Track cost after successful test send
+      addCost(testCost);
+      setCostSummary(getCostSummary());
+      console.log(`✅ Test message sent successfully - Cost tracked: $${testCost.toFixed(4)}`);
+      
+      toast.success(`Test ${isMMS ? 'MMS' : 'SMS'} sent to ${testPhone}`);
+    } catch (error: any) {
+      console.error('❌ Test message failed:', error);
+      toast.error(error.message || 'Failed to send test message');
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -404,6 +672,32 @@ export const MessagingPage: React.FC = () => {
         <MessageSquare className="w-5 h-5 sm:w-6 sm:h-6 lg:w-8 lg:h-8 text-primary-600" />
         <h1 className="text-lg sm:text-xl lg:text-2xl xl:text-3xl font-bold text-gray-900">Send Message</h1>
       </div>
+
+      {/* Undo Banner */}
+      {isUndoPending && (
+        <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg shadow-md animate-pulse">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="w-6 h-6 text-yellow-600 flex-shrink-0" />
+              <div>
+                <p className="font-semibold text-yellow-900">
+                  Sending in {undoCountdown} second{undoCountdown !== 1 ? 's' : ''}...
+                </p>
+                <p className="text-sm text-yellow-700">
+                  Your message will be sent to {recipientsCount} recipient{recipientsCount !== 1 ? 's' : ''}.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleUndo}
+              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg transition-colors flex items-center gap-2 shadow-sm"
+            >
+              <X className="w-4 h-4" />
+              Undo
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
         {/* Message Composer */}
@@ -566,40 +860,180 @@ export const MessagingPage: React.FC = () => {
                 </div>
               </div>
             )}
+
+            {/* Estimated Cost Panel */}
+            {messageType === 'sms' && recipientsCount > 0 && (
+              <div className="mt-3 p-4 bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg shadow-sm">
+                <div className="flex items-center gap-2 mb-3">
+                  <DollarSign className="w-5 h-5 text-blue-600" />
+                  <h3 className="text-sm font-bold text-blue-900">Estimated Cost</h3>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <div className="text-xs text-gray-600 mb-1">Type</div>
+                    <div className="font-semibold text-gray-900">
+                      {isMMS ? 'MMS' : smsInfo.isUnicode ? 'SMS (Unicode)' : 'SMS (GSM-7)'}
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <div className="text-xs text-gray-600 mb-1">Recipients</div>
+                    <div className="font-semibold text-gray-900">{recipientsCount}</div>
+                  </div>
+                  
+                  {!isMMS && (
+                    <>
+                      <div>
+                        <div className="text-xs text-gray-600 mb-1">Segments</div>
+                        <div className="font-semibold text-gray-900">{smsInfo.segments}</div>
+                      </div>
+                      
+                      <div>
+                        <div className="text-xs text-gray-600 mb-1">Encoding</div>
+                        <div className={`font-semibold ${smsInfo.isUnicode ? 'text-amber-700' : 'text-green-700'}`}>
+                          {smsInfo.isUnicode ? 'Unicode' : 'GSM-7'}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                  
+                  <div>
+                    <div className="text-xs text-gray-600 mb-1">Per Recipient</div>
+                    <div className="font-semibold text-gray-900">${costBreakdown.perRecipient.toFixed(4)}</div>
+                  </div>
+                  
+                  <div>
+                    <div className="text-xs text-gray-600 mb-1">Total Cost</div>
+                    <div className={`text-lg font-bold ${isMMS ? 'text-orange-600' : 'text-blue-600'}`}>
+                      ${costBreakdown.totalCost.toFixed(4)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             
-            {/* SMS Stats Display */}
+            {/* SMS/MMS Stats Display with Cost Calculator */}
             {messageType === 'sms' && (
-              <div className="flex items-center justify-between text-xs mt-2 pt-2 border-t border-gray-100">
-                <div className="flex items-center gap-3 text-gray-600">
-                  <span>
-                    {smsInfo.length} chars
-                  </span>
-                  <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
-                    smsInfo.isUnicode ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'
-                  }`}>
-                    {smsInfo.isUnicode ? 'Unicode' : 'GSM-7'}
-                  </span>
-                  <span className="font-medium">
-                    {smsInfo.segments} segment{smsInfo.segments !== 1 ? 's' : ''}
-                  </span>
-                  {smsInfo.isUnicode && (
-                    <button
-                      onClick={handleCleanText}
-                      className="ml-2 px-2 py-0.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded text-[10px] font-medium transition-colors inline-flex items-center gap-1"
-                      title="Convert to GSM-7 to reduce cost"
-                    >
-                      <Eraser className="w-3 h-3" />
-                      Clean
-                    </button>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  {smsInfo.segments > 0 && (
-                    <span className="text-blue-600 font-semibold">
-                      ${smsInfo.estimatedCost.toFixed(4)}
+              <div className="mt-2 pt-2 border-t border-gray-100">
+                <div className="flex items-center justify-between text-xs mb-2">
+                  <div className="flex items-center gap-3 text-gray-600">
+                    <span>
+                      {smsInfo.length} chars
                     </span>
-                  )}
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+                      smsInfo.isUnicode ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'
+                    }`}>
+                      {smsInfo.isUnicode ? 'Unicode' : 'GSM-7'}
+                    </span>
+                    <span className="font-medium">
+                      {smsInfo.segments} segment{smsInfo.segments !== 1 ? 's' : ''}
+                    </span>
+                    {smsInfo.isUnicode && !isMMS && (
+                      <button
+                        onClick={handleCleanText}
+                        className="ml-2 px-2 py-0.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded text-[10px] font-medium transition-colors inline-flex items-center gap-1"
+                        title="Convert to GSM-7 to reduce cost"
+                      >
+                        <Eraser className="w-3 h-3" />
+                        Clean
+                      </button>
+                    )}
+                  </div>
                 </div>
+                
+                {/* Cost Estimator */}
+                {recipientsCount > 0 && (
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded text-sm space-y-1.5">
+                    <div className="font-semibold text-blue-900">
+                      Estimated Cost
+                    </div>
+                    
+                    <div className="text-blue-800">
+                      Type: <span className="font-medium">{costBreakdown.messageType}</span>
+                    </div>
+                    
+                    <div className="text-gray-700">
+                      Recipients: <span className="font-medium text-gray-900">{costBreakdown.totalRecipients}</span>
+                    </div>
+                    
+                    {!isMMS && (
+                      <div className="text-gray-700">
+                        Segments: <span className="font-medium text-gray-900">{smsInfo.segments}</span>
+                      </div>
+                    )}
+                    
+                    <div className="text-gray-700">
+                      Cost per recipient: <span className="font-medium text-gray-900">${costBreakdown.perRecipient.toFixed(4)}</span>
+                    </div>
+                    
+                    <div className={`text-lg font-bold pt-1 ${
+                      isMMS ? 'text-orange-600' : 'text-green-700'
+                    }`}>
+                      Total cost: ${costBreakdown.totalCost.toFixed(4)}
+                    </div>
+                  </div>
+                )}
+
+                {/* Budget Status Display */}
+                {costSummary && messageType === 'sms' && (
+                  <div className="p-3 bg-yellow-50 border border-yellow-300 rounded text-sm space-y-1.5 mt-2">
+                    <div className="flex items-center gap-2">
+                      <DollarSign className="w-4 h-4 text-yellow-800" />
+                      <div className="font-bold text-yellow-800">
+                        Messaging Budget Status
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-1 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-gray-700">Weekly:</span>
+                        <span className={`font-medium ${
+                          costSummary.weeklyCost > WEEKLY_BUDGET * 0.8 
+                            ? costSummary.weeklyCost > WEEKLY_BUDGET 
+                              ? 'text-red-600' 
+                              : 'text-orange-600'
+                            : 'text-gray-900'
+                        }`}>
+                          ${costSummary.weeklyCost.toFixed(2)} / ${WEEKLY_BUDGET}
+                        </span>
+                      </div>
+                      
+                      <div className="flex justify-between">
+                        <span className="text-gray-700">Monthly:</span>
+                        <span className={`font-medium ${
+                          costSummary.monthlyCost > MONTHLY_BUDGET * 0.8 
+                            ? costSummary.monthlyCost > MONTHLY_BUDGET 
+                              ? 'text-red-600' 
+                              : 'text-orange-600'
+                            : 'text-gray-900'
+                        }`}>
+                          ${costSummary.monthlyCost.toFixed(2)} / ${MONTHLY_BUDGET}
+                        </span>
+                      </div>
+                      
+                      <div className="flex justify-between">
+                        <span className="text-gray-700">Yearly:</span>
+                        <span className={`font-medium ${
+                          costSummary.yearlyCost > YEARLY_BUDGET * 0.8 
+                            ? costSummary.yearlyCost > YEARLY_BUDGET 
+                              ? 'text-red-600' 
+                              : 'text-orange-600'
+                            : 'text-gray-900'
+                        }`}>
+                          ${costSummary.yearlyCost.toFixed(2)} / ${YEARLY_BUDGET}
+                        </span>
+                      </div>
+                      
+                      <div className="flex justify-between pt-1 border-t border-yellow-200">
+                        <span className="text-gray-700 font-medium">Lifetime:</span>
+                        <span className="font-bold text-gray-900">
+                          ${costSummary.lifetimeCost.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -642,6 +1076,27 @@ export const MessagingPage: React.FC = () => {
               ))}
             </div>
           </div>
+
+          {/* File Upload for MMS (SMS mode only) */}
+          {messageType === 'sms' && (
+            <div className="mb-3 sm:mb-4">
+              <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2">
+                Attachments (Optional)
+              </label>
+              <FileUpload
+                onFileUploaded={(mediaUrl) => setMediaUrls([...mediaUrls, mediaUrl])}
+                onRemove={() => setMediaUrls([])}
+                disabled={isSending}
+              />
+              {mediaUrls.length > 0 && (
+                <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-lg">
+                  <p className="text-xs text-green-800">
+                    ✅ {mediaUrls.length} file(s) attached • Will send as MMS
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Recipients - Compact on mobile */}
           <div className="mb-4 sm:mb-5 lg:mb-6">
@@ -704,24 +1159,49 @@ export const MessagingPage: React.FC = () => {
             </label>
           </div>
 
-          {/* Send Button - Sticky on mobile */}
-          <button
-            onClick={handleSend}
-            disabled={isSending || (!sendToAll && selectedContacts.length === 0)}
-            className="btn btn-primary w-full flex items-center justify-center gap-2 py-3 text-base font-semibold shadow-lg"
-          >
-            {isSending ? (
-              <>
-                <Loader className="w-5 h-5 animate-spin" />
-                Sending {progress.sent}/{progress.total}...
-              </>
-            ) : (
-              <>
-                <Send className="w-5 h-5" />
-                Send {messageType === 'sms' ? 'SMS' : 'Call'}
-              </>
-            )}
-          </button>
+          {/* MMS Indicator Badge */}
+          {isMMS && (
+            <div className="mb-3 p-2.5 bg-orange-100 text-orange-700 rounded-lg text-sm font-medium text-center border border-orange-200">
+              📎 MMS detected — higher carrier cost applies
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex gap-2">
+            {/* Send Test Button */}
+            <button
+              onClick={handleSendTest}
+              disabled={isSending || !messageContent.trim()}
+              className="btn bg-gray-600 hover:bg-gray-700 text-white flex-1 flex items-center justify-center gap-2 py-3 text-base font-semibold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <MessageSquare className="w-5 h-5" />
+              Send Test
+            </button>
+
+            {/* Send Button - Sticky on mobile */}
+            <button
+              onClick={handleSend}
+              disabled={isSending || isUndoPending || (!sendToAll && selectedContacts.length === 0)}
+              className="btn btn-primary flex-[2] flex items-center justify-center gap-2 py-3 text-base font-semibold shadow-lg"
+            >
+              {isSending ? (
+                <>
+                  <Loader className="w-5 h-5 animate-spin" />
+                  Sending {progress.sent}/{progress.total}...
+                </>
+              ) : isUndoPending ? (
+                <>
+                  <Loader className="w-5 h-5 animate-spin" />
+                  Sending in {undoCountdown}s...
+                </>
+              ) : (
+                <>
+                  <Send className="w-5 h-5" />
+                  Send {messageType === 'sms' ? 'SMS' : 'Call'}
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Selected Contacts Sidebar - Hidden on mobile when no selection */}
@@ -834,6 +1314,183 @@ export const MessagingPage: React.FC = () => {
                   Done
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pre-Send Confirmation Modal */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center gap-3 mb-4">
+              <Send className="w-8 h-8 text-blue-600" />
+              <h3 className="text-xl font-bold text-gray-900">Confirm Send</h3>
+            </div>
+            
+            <div className="mb-6 space-y-4">
+              {/* Message Preview */}
+              <div>
+                <label className="text-sm font-semibold text-gray-700 mb-2 block">Message Preview:</label>
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                  <p className={`text-sm text-gray-800 whitespace-pre-wrap ${!expandPreview && messageContent.length > 200 ? 'line-clamp-3' : ''}`}>
+                    {messageContent}
+                  </p>
+                  {messageContent.length > 200 && (
+                    <button
+                      onClick={() => setExpandPreview(!expandPreview)}
+                      className="text-xs text-blue-600 hover:text-blue-700 mt-2 font-medium"
+                    >
+                      {expandPreview ? '▲ Show Less' : '▼ Show More'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Message Details */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-medium text-gray-700">Type:</span>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {isMMS ? 'MMS' : smsInfo.isUnicode ? 'SMS (Unicode)' : 'SMS (GSM-7)'}
+                  </span>
+                </div>
+                
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-medium text-gray-700">Recipients:</span>
+                  <span className="text-sm font-semibold text-gray-900">{recipientsCount}</span>
+                </div>
+                
+                {!isMMS && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium text-gray-700">Segments:</span>
+                    <span className="text-sm font-semibold text-gray-900">{smsInfo.segments}</span>
+                  </div>
+                )}
+                
+                <div className="flex justify-between items-center pt-2 border-t border-blue-300">
+                  <span className="text-sm font-bold text-gray-800">Estimated Cost:</span>
+                  <span className="text-lg font-bold text-blue-600">
+                    ${costBreakdown.totalCost.toFixed(4)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Attachments List (if MMS) */}
+              {isMMS && mediaUrls.length > 0 && (
+                <div>
+                  <label className="text-sm font-semibold text-gray-700 mb-2 block">Attachments:</label>
+                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+                    <div className="flex items-center gap-2 text-sm text-orange-800">
+                      <AlertTriangle className="w-4 h-4" />
+                      <span className="font-medium">{mediaUrls.length} file(s) attached</span>
+                    </div>
+                    <p className="text-xs text-orange-700 mt-1">
+                      MMS will be sent with attachments
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Warning for large sends */}
+              {recipientsCount > 50 && (
+                <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-3">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-yellow-600 mt-0.5 flex-shrink-0" />
+                    <p className="text-xs text-yellow-800">
+                      You are about to send to <strong>{recipientsCount} recipients</strong>. Please review carefully before confirming.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowConfirmModal(false);
+                  setExpandPreview(false);
+                }}
+                className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmSend}
+                className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+              >
+                <Send className="w-4 h-4" />
+                Confirm Send
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Budget Warning Modal */}
+      {showBudgetWarning && budgetWarningData && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <AlertTriangle className="w-8 h-8 text-orange-600" />
+              <h3 className="text-xl font-bold text-gray-900">Budget Warning</h3>
+            </div>
+            
+            <div className="mb-6 space-y-3">
+              <p className="text-gray-700">
+                {budgetWarningData.message}
+              </p>
+              
+              <div className="bg-orange-50 border border-orange-200 rounded p-3 space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-700">
+                    {budgetWarningData.type.charAt(0).toUpperCase() + budgetWarningData.type.slice(1)} budget:
+                  </span>
+                  <span className="font-medium text-gray-900">
+                    ${budgetWarningData.budget.toFixed(2)}
+                  </span>
+                </div>
+                
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Current spending:</span>
+                  <span className="font-medium text-gray-900">
+                    ${budgetWarningData.currentCost.toFixed(2)}
+                  </span>
+                </div>
+                
+                <div className="flex justify-between">
+                  <span className="text-gray-700">This message:</span>
+                  <span className="font-medium text-gray-900">
+                    ${(budgetWarningData.newTotal - budgetWarningData.currentCost).toFixed(2)}
+                  </span>
+                </div>
+                
+                <div className="flex justify-between pt-2 border-t border-orange-300">
+                  <span className="font-bold text-orange-800">New total:</span>
+                  <span className="font-bold text-orange-800">
+                    ${budgetWarningData.newTotal.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+              
+              <p className="text-sm text-gray-600">
+                Do you want to continue sending this message?
+              </p>
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowBudgetWarning(false)}
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={executeSend}
+                className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg font-medium hover:bg-orange-700 transition-colors"
+              >
+                Continue Anyway
+              </button>
             </div>
           </div>
         </div>

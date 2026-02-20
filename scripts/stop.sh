@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Church Contact System - Stop Script
+# GPBC Contact System - Stop Script
 
 echo "================================================"
-echo "Stopping Church Contact System"
+echo "Stopping GPBC Contact System"
 echo "================================================"
 echo ""
 

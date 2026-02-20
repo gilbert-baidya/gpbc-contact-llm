@@ -4,6 +4,37 @@
  * AI Features powered by OpenAI
  */
 
+/**
+ * Helper function to create JSON responses
+ * Note: Google Apps Script automatically adds CORS headers (Access-Control-Allow-Origin: *)
+ * for web apps deployed with "Who has access: Anyone"
+ */
+function jsonResponse(obj) {
+  const output = ContentService.createTextOutput(JSON.stringify(obj));
+  output.setMimeType(ContentService.MimeType.JSON);
+  return output;
+}
+
+/**
+ * Safe user email helper - NEVER returns undefined
+ * Production-safe with multiple fallbacks
+ */
+function getSafeUserEmail(e) {
+  try {
+    if (e && e.parameter && e.parameter.userEmail) {
+      return String(e.parameter.userEmail);
+    }
+
+    const activeUser = Session.getActiveUser().getEmail();
+    if (activeUser) return activeUser;
+
+  } catch (err) {
+    Logger.log('Could not get user email: ' + err.toString());
+  }
+
+  return "SYSTEM";
+}
+
 // CONFIGURATION
 const PASTOR_PHONES = [
   '+19097630454', // Pastor Gilbert
@@ -16,7 +47,9 @@ const SHEET_NAMES = {
   PRAYER_DASHBOARD: 'Prayer_Dashboard',
   USERS: 'Users',  // Authentication - stores user accounts
   AUDIT_LOG: 'Audit_Log',  // Security audit trail
-  RATE_LIMITS: 'Rate_Limits'  // Track API usage
+  RATE_LIMITS: 'Rate_Limits',  // Track API usage
+  MESSAGE_BILLING: 'MESSAGE_BILLING',  // Financial records for SMS/MMS
+  MESSAGE_STATUS: 'MESSAGE_STATUS'  // Delivery tracking (queued/sent/delivered/failed)
 };
 
 // JWT Secret - Generate once and store in Script Properties
@@ -79,6 +112,87 @@ function preventDuplicate(idempotencyKey) {
 }
 
 /**
+ * Check if idempotency key exists in MESSAGE_BILLING sheet
+ * Returns true if duplicate found, false otherwise
+ */
+function isDuplicate(idempotencyKey) {
+  if (!idempotencyKey) {
+    return false;
+  }
+  
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(SHEET_NAMES.MESSAGE_BILLING);
+    
+    if (!sheet) {
+      return false; // Sheet doesn't exist yet
+    }
+    
+    const data = sheet.getDataRange().getValues();
+    
+    // Check column K (index 10) for idempotencyKey
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][10] === idempotencyKey) {
+        Logger.log('Duplicate billing record prevented: ' + idempotencyKey);
+        return true;
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    Logger.log('Error checking for duplicate: ' + error.toString());
+    return false; // Fail open - allow send if check fails
+  }
+}
+
+/**
+ * Check if contact has opted out
+ * Returns true if contact should NOT receive messages
+ */
+function isOptedOut(phoneNumber) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_NAMES.CONTACTS);
+    
+    if (!sheet) {
+      return false; // No contacts sheet, allow send
+    }
+    
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    
+    // Find Phone_E164 and OptIn column indices
+    const phoneCol = headers.indexOf('Phone_E164');
+    const optInCol = headers.indexOf('OptIn');
+    
+    if (phoneCol === -1 || optInCol === -1) {
+      return false; // Columns not found, allow send
+    }
+    
+    // Normalize phone number
+    const normalizedPhone = normalizePhone(phoneNumber);
+    
+    // Search for contact
+    for (let i = 1; i < data.length; i++) {
+      const rowPhone = data[i][phoneCol];
+      if (rowPhone && normalizePhone(rowPhone.toString()) === normalizedPhone) {
+        const optInStatus = data[i][optInCol];
+        // Block if OptIn is 'No', 'NO', 'STOP', or any opt-out value
+        if (optInStatus && optInStatus.toString().toUpperCase() === 'NO') {
+          Logger.log('🚫 Blocking message to opted-out contact: ' + normalizedPhone);
+          return true;
+        }
+      }
+    }
+    
+    return false; // Not found or opted in
+  } catch (error) {
+    Logger.log('Error checking opt-out status: ' + error.toString());
+    return false; // Fail open - allow send if check fails
+  }
+}
+
+/**
  * Secure Twilio message sending function
  * Uses existing Script Properties: TWILIO_SID, TWILIO_AUTH, TWILIO_FROM
  * Supports both SMS and MMS (with media URLs)
@@ -87,7 +201,16 @@ function preventDuplicate(idempotencyKey) {
  * - SMS: Works normally when mediaUrls is null or empty
  * - MMS: Works when mediaUrls is provided (up to 10 media URLs per Twilio spec)
  */
-function sendTwilioMessage(to, body, mediaUrls) {
+/**
+ * Production-safe Twilio message sender with audit logging and billing tracking
+ * Supports both SMS and MMS
+ * 
+ * @param {string} to - Recipient phone number
+ * @param {string} body - Message content
+ * @param {Array} mediaUrls - Optional array of media URLs for MMS
+ * @param {Object} billingData - Optional billing metadata (userEmail, idempotencyKey, segments, isUnicode)
+ */
+function sendTwilioMessage(to, body, mediaUrls, billingData) {
   const props = PropertiesService.getScriptProperties();
   
   const accountSid = props.getProperty('TWILIO_SID');
@@ -99,6 +222,37 @@ function sendTwilioMessage(to, body, mediaUrls) {
     throw new Error('Server configuration error: Twilio credentials missing');
   }
   
+  // PART 10: COMPLIANCE - Check if recipient has opted out
+  if (isOptedOut(to)) {
+    const error = new Error('Cannot send to opted-out contact: ' + to);
+    Logger.log('🚫 COMPLIANCE BLOCK: ' + error.message);
+    
+    // Log compliance block
+    try {
+      logAuditEvent('SYSTEM', 'SEND_BLOCKED_OPT_OUT', { 
+        recipient: to,
+        reason: 'Contact has opted out'
+      });
+    } catch (auditErr) {
+      Logger.log('Audit log failed (non-blocking): ' + auditErr.toString());
+    }
+    
+    throw error;
+  }
+  
+  // Determine message type and billing info
+  const isMMS = mediaUrls && Array.isArray(mediaUrls) && mediaUrls.length > 0;
+  const messageType = isMMS ? 'MMS' : 'SMS';
+  const mediaCount = isMMS ? mediaUrls.length : 0;
+  const segments = (billingData && billingData.segments) || 1;
+  const isUnicode = (billingData && billingData.isUnicode) || false;
+  const userEmail = (billingData && billingData.userEmail) || 'SYSTEM';
+  const idempotencyKey = (billingData && billingData.idempotencyKey) || '';
+  
+  // Calculate cost (PART 8)
+  const costPerRecipient = calculateMessageCost(messageType, segments, isUnicode);
+  
+  // Build Twilio payload safely
   const payload = {
     To: to,
     From: fromNumber,
@@ -106,8 +260,7 @@ function sendTwilioMessage(to, body, mediaUrls) {
   };
   
   // Add media URLs for MMS (Twilio supports up to 10 media URLs)
-  // Format: MediaUrl, MediaUrl1, MediaUrl2, etc.
-  if (mediaUrls && Array.isArray(mediaUrls) && mediaUrls.length > 0) {
+  if (isMMS) {
     mediaUrls.forEach(function(url, index) {
       if (index === 0) {
         payload['MediaUrl'] = url;
@@ -135,14 +288,101 @@ function sendTwilioMessage(to, body, mediaUrls) {
     const result = JSON.parse(response.getContentText());
     
     if (responseCode !== 200 && responseCode !== 201) {
-      Logger.log('Twilio API error: ' + response.getContentText());
-      throw new Error('Twilio API error: ' + (result.message || 'Unknown error'));
+      const errorMsg = 'Twilio API error: ' + (result.message || 'Unknown error');
+      Logger.log(errorMsg + ' - Full response: ' + response.getContentText());
+      
+      // Safe audit log on failure
+      try {
+        logAuditEvent("SYSTEM", "SEND_MESSAGE_FAILED", {
+          to: to,
+          hasMedia: isMMS,
+          error: result.message || 'Unknown error',
+          code: result.code || responseCode
+        });
+      } catch (auditErr) {
+        Logger.log('Audit log failed (non-blocking): ' + auditErr.toString());
+      }
+      
+      throw new Error(errorMsg);
     }
     
     Logger.log('✅ Message sent successfully - SID: ' + result.sid + ', Media: ' + (result.num_media || 0));
+    
+    // PART 2 - Log billing after successful send (PART 7 - only on success)
+    try {
+      logMessageBilling({
+        userEmail: userEmail,
+        recipient: to,
+        messageType: messageType,
+        segments: segments,
+        mediaCount: mediaCount,
+        costPerRecipient: costPerRecipient,
+        totalCost: costPerRecipient,
+        sid: result.sid,
+        status: result.status,
+        idempotencyKey: idempotencyKey
+      });
+    } catch (billingErr) {
+      Logger.log('Billing log failed (non-blocking): ' + billingErr.toString());
+    }
+    
+    // PART 7: Log message delivery status
+    try {
+      logMessageStatus({
+        sid: result.sid,
+        recipient: to,
+        status: result.status || 'sent',
+        messageType: messageType,
+        userEmail: userEmail,
+        errorCode: '',
+        errorMessage: ''
+      });
+    } catch (statusErr) {
+      Logger.log('Status log failed (non-blocking): ' + statusErr.toString());
+    }
+    
+    // Safe audit log on success
+    try {
+      logAuditEvent("SYSTEM", "SEND_MESSAGE_SUCCESS", {
+        to: to,
+        hasMedia: isMMS,
+        mediaCount: mediaCount,
+        sid: result.sid
+      });
+    } catch (auditErr) {
+      Logger.log('Audit log failed (non-blocking): ' + auditErr.toString());
+    }
+    
     return result;
   } catch (error) {
     Logger.log('Error calling Twilio API: ' + error.toString());
+    
+    // PART 7: Log failed message status
+    try {
+      logMessageStatus({
+        sid: '',
+        recipient: to,
+        status: 'failed',
+        messageType: isMMS ? 'MMS' : 'SMS',
+        userEmail: userEmail,
+        errorCode: 'API_ERROR',
+        errorMessage: error.toString()
+      });
+    } catch (statusErr) {
+      Logger.log('Status log failed (non-blocking): ' + statusErr.toString());
+    }
+    
+    // Safe audit log on exception
+    try {
+      logAuditEvent("SYSTEM", "SEND_MESSAGE_FAILED", {
+        to: to,
+        hasMedia: isMMS,
+        error: error.toString()
+      });
+    } catch (auditErr) {
+      Logger.log('Audit log failed (non-blocking): ' + auditErr.toString());
+    }
+    
     throw error;
   }
 }
@@ -723,6 +963,18 @@ function verifyUserToken(token) {
 // ==================== END AUTHENTICATION ====================
 
 /**
+ * Handle OPTIONS requests for CORS preflight
+ * Note: This function may not be called as Google Apps Script web apps
+ * don't fully support OPTIONS requests. However, CORS works automatically
+ * for GET/POST requests when deployed with "Who has access: Anyone"
+ */
+function doOptions(e) {
+  return ContentService
+    .createTextOutput()
+    .setMimeType(ContentService.MimeType.TEXT);
+}
+
+/**
  * API handler for GET requests (stats, contacts, and AI features)
  * Protected with API key authentication
  */
@@ -747,6 +999,12 @@ function doGet(e) {
         return getContacts();
       case 'getMessageHistory':
         return getMessageHistory();
+      case 'getBillingSummary':
+        // PART 4 & 9 - Billing summary endpoint with API key verification
+        return jsonResponse(getBillingSummaryFromSheet());
+      case 'getDeliveryStats':
+        // PART 8 - Delivery statistics endpoint
+        return jsonResponse(getDeliveryStats());
       case 'personalizeMessage':
         return personalizeMessage(e.parameter);
       case 'improveMessage':
@@ -1001,6 +1259,14 @@ function translateMessage(params) {
  */
 function doPost(e) {
   try {
+    // Validate request object exists
+    if (!e || !e.parameter) {
+      return jsonResponse({
+        success: false,
+        error: 'Invalid request'
+      });
+    }
+    
     // Check if this is an API call (has action parameter)
     const action = e.parameter.action || '';
     
@@ -1020,7 +1286,10 @@ function doPost(e) {
         case 'uploadFile':
           return handleUploadFile(e);
         default:
-          return jsonResponse({ error: 'Invalid action' });
+          return jsonResponse({ 
+            success: false,
+            error: 'Unknown action' 
+          });
       }
     }
     
@@ -1075,6 +1344,17 @@ function doPost(e) {
         replyMessage = 'You have been unsubscribed. You will no longer receive messages from GPBC.';
         if (contact) {
           updateContactOptIn(contact.row, 'NO');
+          
+          // PART 10: COMPLIANCE - Log opt-out for audit trail
+          try {
+            logAuditEvent('TWILIO_WEBHOOK', 'CONTACT_OPTED_OUT', {
+              phone: normalizedPhone,
+              name: contactName,
+              message: body
+            });
+          } catch (auditErr) {
+            Logger.log('Audit log failed (non-blocking): ' + auditErr.toString());
+          }
         }
         break;
         
@@ -1104,6 +1384,16 @@ function doPost(e) {
       
   } catch (error) {
     Logger.log('Error in doPost: ' + error.toString());
+    
+    // If this was an API call, return JSON error
+    if (e && e.parameter && e.parameter.action) {
+      return jsonResponse({
+        success: false,
+        error: error.toString()
+      });
+    }
+    
+    // Otherwise return TwiML for webhook
     return ContentService
       .createTextOutput(createTwiMLResponse('We received your message. Thank you.'))
       .setMimeType(ContentService.MimeType.XML);
@@ -1547,6 +1837,17 @@ function handleVerifyToken(e) {
  * Phase 3.3: Enhanced to fully support MMS with backward compatibility for SMS
  */
 function handleSendSMS(e) {
+  // Safe initialization of userEmail
+  var userEmail = 'system';
+  var userRole = 'api';
+  
+  try {
+    userEmail = Session.getActiveUser().getEmail() || 'system';
+  } catch (sessionError) {
+    Logger.log('Could not get active user email: ' + sessionError.toString());
+    userEmail = 'system';
+  }
+  
   try {
     // SECURITY 1: Validate API Key using existing API_KEY property
     validateApiKey(e);
@@ -1558,18 +1859,19 @@ function handleSendSMS(e) {
     }
     
     // SECURITY 3: Verify user token and extract user info (if token provided)
-    let userEmail = 'api_user';
-    let userRole = 'api';
-    
     if (e.parameter.token || (e.postData && e.postData.contents)) {
       const userPayload = verifyRequestToken(e);
       if (userPayload) {
-        userEmail = userPayload.email;
-        userRole = userPayload.role;
+        userEmail = userPayload.email || 'system';
+        userRole = userPayload.role || 'api';
         
         // Check role authorization (admin or pastor only)
         if (!hasRequiredRole(userPayload, ['admin', 'pastor'])) {
-          logAuditEvent(userEmail, 'SMS_SEND_FORBIDDEN', { role: userRole });
+          try {
+            logAuditEvent(userEmail || 'system', 'SMS_SEND_FORBIDDEN', { role: userRole });
+          } catch (auditError) {
+            Logger.log('Audit logging failed: ' + auditError.toString());
+          }
           return forbiddenResponse('Only admin and pastor roles can send messages');
         }
       }
@@ -1634,8 +1936,8 @@ function handleSendSMS(e) {
     }
     
     // SECURITY 4: Check advanced rate limits (if user authenticated)
-    if (userEmail !== 'api_user') {
-      const rateLimit = checkAdvancedRateLimit(userEmail, 'SEND_SMS');
+    if (userEmail !== 'system' && userEmail !== 'api_user') {
+      const rateLimit = checkAdvancedRateLimit(userEmail || 'system', 'SEND_SMS');
       if (!rateLimit.allowed) {
         return jsonResponse({ 
           error: rateLimit.error,
@@ -1647,8 +1949,21 @@ function handleSendSMS(e) {
       }
     }
     
-    // Send message using secure Twilio function (SMS or MMS)
-    const result = sendTwilioMessage(to, body, mediaUrls);
+    // Calculate segments for billing (basic estimation)
+    const isUnicode = /[^\x00-\x7F]/.test(body); // Has non-ASCII characters
+    const segmentLength = isUnicode ? 70 : 160;
+    const segments = Math.ceil(body.length / segmentLength);
+    
+    // Prepare billing data
+    const billingData = {
+      userEmail: userEmail,
+      idempotencyKey: idempotencyKey || '',
+      segments: segments,
+      isUnicode: isUnicode
+    };
+    
+    // Send message using secure Twilio function (SMS or MMS) with billing data
+    const result = sendTwilioMessage(to, body, mediaUrls, billingData);
     
     // Log to SMS_Log sheet
     logToSheet('SMS_Log', {
@@ -1658,24 +1973,28 @@ function handleSendSMS(e) {
       message: body,
       status: result.status,
       sid: result.sid,
-      user: userEmail,
-      role: userRole,
+      user: userEmail || 'system',
+      role: userRole || 'api',
       idempotency_key: idempotencyKey || '',
       media_count: (mediaUrls && mediaUrls.length) || 0,
       error_code: result.error_code || '',
       error_message: result.error_message || ''
     });
     
-    // Log audit event
-    logAuditEvent(userEmail, mediaUrls.length > 0 ? 'MMS_SENT' : 'SMS_SENT', {
-      to: to,
-      messageLength: body.length,
-      sid: result.sid,
-      status: result.status,
-      idempotencyKey: idempotencyKey || 'none',
-      hasMedia: !!(mediaUrls && mediaUrls.length),
-      mediaCount: mediaUrls.length
-    });
+    // Log audit event (wrapped for safety - don't block message send)
+    try {
+      logAuditEvent(userEmail || 'system', mediaUrls.length > 0 ? 'MMS_SENT' : 'SMS_SENT', {
+        to: to,
+        messageLength: body.length,
+        sid: result.sid,
+        status: result.status,
+        idempotencyKey: idempotencyKey || 'none',
+        hasMedia: !!(mediaUrls && mediaUrls.length),
+        mediaCount: mediaUrls.length
+      });
+    } catch (auditError) {
+      Logger.log('Audit logging failed but message sent: ' + auditError.toString());
+    }
     
     return jsonResponse({ 
       success: true, 
@@ -1691,6 +2010,13 @@ function handleSendSMS(e) {
   } catch (error) {
     const errorMessage = error.toString();
     Logger.log('Error in handleSendSMS: ' + errorMessage);
+    
+    // Try to log error to audit (but don't fail if this fails)
+    try {
+      logAuditEvent(userEmail || 'system', 'SMS_SEND_FAILED', { error: errorMessage });
+    } catch (auditError) {
+      Logger.log('Audit logging failed: ' + auditError.toString());
+    }
     
     // Check if it's a duplicate error
     if (errorMessage.includes('Duplicate message prevented')) {
@@ -1865,35 +2191,27 @@ function handleMakeCall(e) {
  */
 function handleUploadFile(e) {
   try {
+    // Safe guard for manual execution
+    if (!e || !e.parameter) {
+      Logger.log('handleUploadFile called without HTTP request');
+      return jsonResponse({
+        success: false,
+        error: 'This function must be called via HTTP POST, not manually from editor'
+      });
+    }
+    
     // SECURITY 1: Validate API Key using existing API_KEY property
     validateApiKey(e);
     
     // Parse request parameters
-    let fileName, base64Data, mimeType;
-    
-    // Try POST body first
-    if (e.postData && e.postData.contents) {
-      try {
-        const postData = JSON.parse(e.postData.contents);
-        fileName = postData.fileName;
-        base64Data = postData.base64Data || postData.fileContent; // Support both parameter names
-        mimeType = postData.mimeType;
-      } catch (parseError) {
-        Logger.log('Error parsing POST data: ' + parseError.toString());
-      }
-    }
-    
-    // Fallback to query parameters
-    if (!fileName || !base64Data || !mimeType) {
-      fileName = fileName || e.parameter.fileName;
-      base64Data = base64Data || e.parameter.base64Data || e.parameter.fileContent;
-      mimeType = mimeType || e.parameter.mimeType;
-    }
+    const fileName = e.parameter.fileName;
+    const mimeType = e.parameter.mimeType;
+    const base64Data = e.parameter.base64Data;
     
     if (!fileName || !base64Data || !mimeType) {
       return jsonResponse({ 
-        error: 'Missing required parameters: fileName, base64Data (or fileContent), mimeType',
-        success: false 
+        success: false,
+        error: 'Missing file parameters'
       });
     }
     
@@ -1911,8 +2229,8 @@ function handleUploadFile(e) {
         fileName: fileName
       });
       return jsonResponse({ 
-        error: 'Invalid file type. Only JPEG, PNG, and PDF files are allowed.',
-        success: false 
+        success: false,
+        error: 'File type not allowed'
       });
     }
     
@@ -1939,34 +2257,24 @@ function handleUploadFile(e) {
         fileName: fileName
       });
       return jsonResponse({ 
-        error: 'File size exceeds 5MB limit. File size: ' + (fileSizeBytes / 1024 / 1024).toFixed(2) + 'MB',
-        success: false 
+        success: false,
+        error: 'File too large'
       });
     }
     
     // Get upload folder from Script Properties (UPLOAD_FOLDER_ID)
-    const props = PropertiesService.getScriptProperties();
-    const folderId = props.getProperty('UPLOAD_FOLDER_ID');
+    const folderId = PropertiesService.getScriptProperties().getProperty('UPLOAD_FOLDER_ID');
     
     if (!folderId) {
       Logger.log('⚠️ UPLOAD_FOLDER_ID not configured in Script Properties');
       return jsonResponse({ 
-        error: 'Server configuration error: Upload folder not configured. Run setupUploadFolder()',
-        success: false 
+        success: false,
+        error: 'Server configuration error: Upload folder not configured. Run setupUploadFolder()'
       });
     }
     
     // Get folder from Drive
-    let folder;
-    try {
-      folder = DriveApp.getFolderById(folderId);
-    } catch (folderError) {
-      Logger.log('Error accessing upload folder: ' + folderError.toString());
-      return jsonResponse({ 
-        error: 'Server configuration error: Invalid upload folder ID',
-        success: false 
-      });
-    }
+    const folder = DriveApp.getFolderById(folderId);
     
     // Create blob and save file to Drive
     const blob = Utilities.newBlob(fileBytes, mimeType, fileName);
@@ -1979,15 +2287,14 @@ function handleUploadFile(e) {
     );
     
     // Get Twilio-compatible public URL
-    const fileId = file.getId();
-    const mediaUrl = 'https://drive.google.com/uc?export=download&id=' + fileId;
+    const mediaUrl = 'https://drive.google.com/uc?export=download&id=' + file.getId();
     
     // Log successful upload
     logAuditEvent('SYSTEM', 'FILE_UPLOADED', {
       fileName: fileName,
       mimeType: mimeType,
       sizeBytes: fileSizeBytes,
-      fileId: fileId,
+      fileId: file.getId(),
       mediaUrl: mediaUrl
     });
     
@@ -1995,29 +2302,15 @@ function handleUploadFile(e) {
     
     return jsonResponse({ 
       success: true,
-      mediaUrl: mediaUrl,
-      fileId: fileId,
-      fileName: fileName,
-      mimeType: mimeType,
-      sizeBytes: fileSizeBytes
+      mediaUrl: mediaUrl
     });
       
   } catch (error) {
-    const errorMessage = error.toString();
-    Logger.log('Error in handleUploadFile: ' + errorMessage);
+    Logger.log('Upload error: ' + error);
     
-    // Check if it's an unauthorized error
-    if (errorMessage.includes('Unauthorized')) {
-      return jsonResponse({ 
-        error: 'Unauthorized: Invalid API Key',
-        success: false 
-      });
-    }
-    
-    logAuditEvent('SYSTEM', 'FILE_UPLOAD_FAILED', { error: errorMessage });
     return jsonResponse({ 
-      error: 'Failed to upload file: ' + errorMessage, 
-      success: false 
+      success: false,
+      error: error.toString()
     });
   }
 }
@@ -2124,27 +2417,370 @@ function getMessageHistory() {
 /**
  * Log audit events for security tracking
  */
+/**
+ * Production-safe audit logging - NEVER crashes message sending
+ * All errors are caught and logged
+ */
 function logAuditEvent(userEmail, action, details) {
   try {
+    const safeUser = userEmail || "SYSTEM";
+    const timestamp = new Date();
+
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     let sheet = ss.getSheetByName(SHEET_NAMES.AUDIT_LOG);
     
     // Create sheet if it doesn't exist
     if (!sheet) {
       sheet = ss.insertSheet(SHEET_NAMES.AUDIT_LOG);
-      sheet.appendRow(['Timestamp', 'User', 'Action', 'Details', 'IP Address']);
+      sheet.appendRow(['Timestamp', 'User', 'Action', 'Details', 'Status']);
       sheet.getRange('A1:E1').setFontWeight('bold').setBackground('#e74c3c').setFontColor('#ffffff');
       sheet.setFrozenRows(1);
     }
     
+    const detailsStr = typeof details === 'object' ? JSON.stringify(details) : String(details);
+    
+    sheet.appendRow([timestamp, safeUser, action, detailsStr, 'OK']);
+    
+    Logger.log(`AUDIT: ${action} by ${safeUser}`);
+    
+  } catch (err) {
+    // CRITICAL: Never let audit failure crash the calling function
+    Logger.log('AUDIT FAILURE (non-blocking): ' + err.toString());
+  }
+}
+
+/**
+ * PART 3 - Log message billing to MESSAGE_BILLING sheet
+ * Finance-grade permanent record of all SMS/MMS costs
+ * 
+ * @param {Object} data - Billing data
+ * @param {string} data.userEmail - User who sent the message
+ * @param {string} data.recipient - Phone number recipient
+ * @param {string} data.messageType - "SMS" or "MMS"
+ * @param {number} data.segments - Number of SMS segments
+ * @param {number} data.mediaCount - Number of media attachments
+ * @param {number} data.costPerRecipient - Cost per message
+ * @param {number} data.totalCost - Total cost
+ * @param {string} data.sid - Twilio message SID
+ * @param {string} data.status - Twilio message status
+ * @param {string} data.idempotencyKey - Unique key to prevent duplicates
+ */
+function logMessageBilling(data) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(SHEET_NAMES.MESSAGE_BILLING);
+    
+    // Create MESSAGE_BILLING sheet if it doesn't exist
+    if (!sheet) {
+      sheet = ss.insertSheet(SHEET_NAMES.MESSAGE_BILLING);
+      sheet.appendRow([
+        'Timestamp',
+        'UserEmail',
+        'Recipient',
+        'MessageType',
+        'Segments',
+        'MediaCount',
+        'CostPerRecipient',
+        'TotalCost',
+        'TwilioSID',
+        'Status',
+        'IdempotencyKey'
+      ]);
+      sheet.getRange('A1:K1').setFontWeight('bold').setBackground('#27ae60').setFontColor('#ffffff');
+      sheet.setFrozenRows(1);
+      
+      // Format currency columns
+      sheet.getRange('G:H').setNumberFormat('$0.0000');
+    }
+    
+    // Check for duplicate using idempotencyKey (PART 7 - Finance Safety)
+    if (data.idempotencyKey) {
+      const dataRange = sheet.getDataRange();
+      const values = dataRange.getValues();
+      
+      for (let i = 1; i < values.length; i++) {
+        if (values[i][10] === data.idempotencyKey) {
+          Logger.log('⚠️ Duplicate billing entry prevented for idempotency key: ' + data.idempotencyKey);
+          return; // Skip duplicate
+        }
+      }
+    }
+    
+    // Append billing record
+    sheet.appendRow([
+      new Date(),
+      data.userEmail || 'SYSTEM',
+      data.recipient || '',
+      data.messageType || 'SMS',
+      data.segments || 1,
+      data.mediaCount || 0,
+      data.costPerRecipient || 0,
+      data.totalCost || 0,
+      data.sid || '',
+      data.status || 'unknown',
+      data.idempotencyKey || ''
+    ]);
+    
+    Logger.log('💰 Billing logged: ' + data.messageType + ' to ' + data.recipient + ' - $' + (data.totalCost || 0).toFixed(4));
+    
+  } catch (err) {
+    // CRITICAL: Never let billing log failure crash message sending
+    Logger.log('BILLING LOG FAILURE (non-blocking): ' + err.toString());
+  }
+}
+
+/**
+ * PART 8 - Calculate cost per message
+ * Uses accurate Twilio USA pricing
+ */
+function calculateMessageCost(messageType, segments, isUnicode) {
+  // Twilio USA Pricing (PART 8)
+  const SMS_COST_GSM = 0.0083;      // GSM-7 per segment
+  const SMS_COST_UNICODE = 0.0166;  // Unicode per segment
+  const MMS_COST = 0.02;            // Flat per message
+  
+  if (messageType === 'MMS') {
+    return MMS_COST;
+  }
+  
+  // SMS cost depends on encoding
+  const costPerSegment = isUnicode ? SMS_COST_UNICODE : SMS_COST_GSM;
+  return segments * costPerSegment;
+}
+
+/**
+ * PART 4 - Get billing summary from MESSAGE_BILLING sheet
+ * Returns weekly, monthly, yearly, lifetime costs and message counts
+ */
+function getBillingSummaryFromSheet() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_NAMES.MESSAGE_BILLING);
+    
+    if (!sheet) {
+      return {
+        weeklyCost: 0,
+        monthlyCost: 0,
+        yearlyCost: 0,
+        lifetimeCost: 0,
+        messageCount: 0,
+        smsCount: 0,
+        mmsCount: 0
+      };
+    }
+    
+    const dataRange = sheet.getDataRange();
+    const values = dataRange.getValues();
+    
+    if (values.length <= 1) {
+      // No data yet (only header row)
+      return {
+        weeklyCost: 0,
+        monthlyCost: 0,
+        yearlyCost: 0,
+        lifetimeCost: 0,
+        messageCount: 0,
+        smsCount: 0,
+        mmsCount: 0
+      };
+    }
+    
+    const now = new Date();
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const monthAgo = new Date(now.getFullYear(), now.getMonth(), 1);
+    const yearAgo = new Date(now.getFullYear(), 0, 1);
+    
+    let weeklyCost = 0;
+    let monthlyCost = 0;
+    let yearlyCost = 0;
+    let lifetimeCost = 0;
+    let messageCount = 0;
+    let smsCount = 0;
+    let mmsCount = 0;
+    
+    // Skip header row (index 0)
+    for (let i = 1; i < values.length; i++) {
+      const timestamp = new Date(values[i][0]);
+      const messageType = values[i][3];
+      const cost = parseFloat(values[i][7]) || 0;
+      
+      messageCount++;
+      lifetimeCost += cost;
+      
+      if (messageType === 'MMS') {
+        mmsCount++;
+      } else {
+        smsCount++;
+      }
+      
+      if (timestamp >= weekAgo) {
+        weeklyCost += cost;
+      }
+      
+      if (timestamp >= monthAgo) {
+        monthlyCost += cost;
+      }
+      
+      if (timestamp >= yearAgo) {
+        yearlyCost += cost;
+      }
+    }
+    
+    return {
+      weeklyCost: parseFloat(weeklyCost.toFixed(4)),
+      monthlyCost: parseFloat(monthlyCost.toFixed(4)),
+      yearlyCost: parseFloat(yearlyCost.toFixed(4)),
+      lifetimeCost: parseFloat(lifetimeCost.toFixed(4)),
+      messageCount,
+      smsCount,
+      mmsCount
+    };
+    
+  } catch (err) {
+    Logger.log('Error getting billing summary: ' + err.toString());
+    return {
+      weeklyCost: 0,
+      monthlyCost: 0,
+      yearlyCost: 0,
+      lifetimeCost: 0,
+      messageCount: 0,
+      smsCount: 0,
+      mmsCount: 0,
+      error: err.toString()
+    };
+  }
+}
+
+/**
+ * PART 7: Log message delivery status to MESSAGE_STATUS sheet
+ * Tracks: queued, sent, delivered, failed, undelivered
+ */
+function logMessageStatus(data) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(SHEET_NAMES.MESSAGE_STATUS);
+    
+    // Create sheet if it doesn't exist
+    if (!sheet) {
+      sheet = ss.insertSheet(SHEET_NAMES.MESSAGE_STATUS);
+      
+      // Set headers
+      const headers = [
+        'Timestamp',
+        'TwilioSID',
+        'Recipient',
+        'Status',
+        'MessageType',
+        'UserEmail',
+        'ErrorCode',
+        'ErrorMessage'
+      ];
+      
+      sheet.appendRow(headers);
+      sheet.getRange(1, 1, 1, headers.length)
+        .setFontWeight('bold')
+        .setBackground('#f3f3f3');
+      sheet.setFrozenRows(1);
+      
+      Logger.log('✅ MESSAGE_STATUS sheet created');
+    }
+    
+    // Append status record
     const timestamp = new Date();
-    const detailsStr = typeof details === 'object' ? JSON.stringify(details) : details;
+    sheet.appendRow([
+      timestamp,
+      data.sid || '',
+      data.recipient || '',
+      data.status || 'unknown',
+      data.messageType || 'SMS',
+      data.userEmail || 'SYSTEM',
+      data.errorCode || '',
+      data.errorMessage || ''
+    ]);
     
-    sheet.appendRow([timestamp, userEmail, action, detailsStr, 'N/A']);
-    
-    Logger.log(`AUDIT: ${action} by ${userEmail} at ${timestamp}`);
   } catch (error) {
-    Logger.log('Error logging audit event: ' + error.toString());
+    Logger.log('Error logging message status (non-blocking): ' + error.toString());
+  }
+}
+
+/**
+ * PART 8: Get delivery statistics from MESSAGE_STATUS sheet
+ * Returns success rate and status breakdown
+ */
+function getDeliveryStats() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_NAMES.MESSAGE_STATUS);
+    
+    if (!sheet) {
+      return {
+        totalMessages: 0,
+        delivered: 0,
+        sent: 0,
+        failed: 0,
+        queued: 0,
+        undelivered: 0,
+        successRate: 0
+      };
+    }
+    
+    const values = sheet.getDataRange().getValues();
+    
+    if (values.length <= 1) {
+      return {
+        totalMessages: 0,
+        delivered: 0,
+        sent: 0,
+        failed: 0,
+        queued: 0,
+        undelivered: 0,
+        successRate: 0
+      };
+    }
+    
+    let delivered = 0;
+    let sent = 0;
+    let failed = 0;
+    let queued = 0;
+    let undelivered = 0;
+    
+    // Skip header row
+    for (let i = 1; i < values.length; i++) {
+      const status = (values[i][3] || '').toString().toLowerCase();
+      
+      if (status === 'delivered') delivered++;
+      else if (status === 'sent') sent++;
+      else if (status === 'failed') failed++;
+      else if (status === 'queued') queued++;
+      else if (status === 'undelivered') undelivered++;
+    }
+    
+    const totalMessages = values.length - 1;
+    const successRate = totalMessages > 0 
+      ? ((delivered / totalMessages) * 100).toFixed(2)
+      : 0;
+    
+    return {
+      totalMessages,
+      delivered,
+      sent,
+      failed,
+      queued,
+      undelivered,
+      successRate: parseFloat(successRate)
+    };
+    
+  } catch (error) {
+    Logger.log('Error getting delivery stats: ' + error.toString());
+    return {
+      totalMessages: 0,
+      delivered: 0,
+      sent: 0,
+      failed: 0,
+      queued: 0,
+      undelivered: 0,
+      successRate: 0
+    };
   }
 }
 
@@ -2430,19 +3066,9 @@ function viewSecurityConfig() {
   if (!uploadFolderId) {
     Logger.log('❗ Configure UPLOAD_FOLDER_ID in Script Properties for file uploads');
   }
-  }
-  if (!twilioAuth) {
-    Logger.log('❗ Configure Twilio credentials for SMS/Call functionality');
-  }
   
   Logger.log('========================================');
-  
-  return {
-    jwtSecret: !!jwtSecret,
-    apiKey: !!apiKey,
-    uploadFolderId: !!uploadFolderId,
-    twilioConfigured: !!(twilioSid && twilioAuth && twilioFrom)
-  };
+  // Removed illegal return statement and extra closing brace
 }
 
 /**

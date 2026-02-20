@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Church Contact System - Start Script
+# GPBC Contact System - Start Script
 # This script starts all services and provides helpful information
 
 echo "================================================"
@@ -31,7 +31,7 @@ if ! docker info > /dev/null 2>&1; then
     exit 1
 fi
 
-echo "🚀 Starting Church Contact System..."
+echo "🚀 Starting GPBC Contact System..."
 echo ""
 
 # Start services

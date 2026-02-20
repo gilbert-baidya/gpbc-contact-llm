@@ -3,7 +3,7 @@
 # View system logs
 
 echo "================================================"
-echo "Church Contact System - Logs"
+echo "GPBC Contact System - Logs"
 echo "================================================"
 echo ""
 echo "Press Ctrl+C to exit"

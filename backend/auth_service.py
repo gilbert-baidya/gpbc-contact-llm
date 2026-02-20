@@ -185,7 +185,7 @@ class AuthService:
         totp = pyotp.TOTP(secret)
         provisioning_uri = totp.provisioning_uri(
             name=user.email,
-            issuer_name="Church Contact System"
+            issuer_name="GPBC Contact System"
         )
         
         return {
