@@ -47,89 +47,80 @@ export const MessagingPage: React.FC = () => {
   const SMS_COST_UNICODE = 0.0166;  // Unicode per segment
   const MMS_COST = 0.02;            // Flat per message
 
-  // SMS Text Sanitizer - Converts Unicode to GSM-safe ASCII
+  // SMS Text Sanitizer
+  // For English-only SMS: converts common Unicode symbols to GSM-7 ASCII equivalents to save cost.
+  // For messages containing Bangla, Hindi, Arabic, Chinese, emojis, or other intentional
+  // non-Latin content: preserves the full text as-is (sent as Unicode SMS).
   const sanitizeSmsText = (text: string): string => {
     if (!text) return text;
 
+    // Detect intentional non-Latin scripts and emojis that should be preserved
+    const hasBangla  = /[\u0980-\u09FF]/.test(text);
+    const hasHindi   = /[\u0900-\u097F]/.test(text);
+    const hasArabic  = /[\u0600-\u06FF]/.test(text);
+    const hasChinese = /[\u4E00-\u9FFF]/.test(text);
+    const hasEmoji   = /\p{Emoji_Presentation}/u.test(text);
+
+    // If the message deliberately uses a non-Latin script or emoji, skip lossy stripping.
+    // Only do safe invisible-character cleanup.
+    if (hasBangla || hasHindi || hasArabic || hasChinese || hasEmoji) {
+      // Remove only truly invisible / zero-width junk characters
+      return text.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+    }
+
+    // --- English / Latin path: convert to GSM-7 for cost savings ---
     let cleaned = text;
 
-    // Step 1: Normalize Unicode to decomposed form (NFKD)
-    cleaned = cleaned.normalize('NFKD');
-
-    // Step 2: Replace common Unicode characters with ASCII equivalents
+    // Step 1: Safe Unicode → ASCII replacements (smart quotes, dashes, spaces, etc.)
     const replacements: Record<string, string> = {
       // Smart quotes
-      '\u2018': "'",  // Left single quotation mark
-      '\u2019': "'",  // Right single quotation mark
-      '\u201C': '"',  // Left double quotation mark
-      '\u201D': '"',  // Right double quotation mark
-      '\u201A': ',',  // Single low-9 quotation mark
-      '\u201E': '"',  // Double low-9 quotation mark
-      '\u2039': '<',  // Single left-pointing angle quotation
-      '\u203A': '>',  // Single right-pointing angle quotation
+      '\u2018': "'",   // Left single quotation mark
+      '\u2019': "'",   // Right single quotation mark
+      '\u201C': '"',   // Left double quotation mark
+      '\u201D': '"',   // Right double quotation mark
+      '\u201A': ',',   // Single low-9 quotation mark
+      '\u201E': '"',   // Double low-9 quotation mark
+      '\u2039': '<',   // Single left-pointing angle quotation
+      '\u203A': '>',   // Single right-pointing angle quotation
       // Dashes and hyphens
-      '\u2013': '-',  // En dash
-      '\u2014': '-',  // Em dash
-      '\u2015': '-',  // Horizontal bar
-      '\u2212': '-',  // Minus sign
+      '\u2013': '-',   // En dash
+      '\u2014': '-',   // Em dash
+      '\u2015': '-',   // Horizontal bar
+      '\u2212': '-',   // Minus sign
       // Spaces
-      '\u00A0': ' ',  // Non-breaking space
-      '\u2000': ' ',  // En quad
-      '\u2001': ' ',  // Em quad
-      '\u2002': ' ',  // En space
-      '\u2003': ' ',  // Em space
-      '\u2004': ' ',  // Three-per-em space
-      '\u2005': ' ',  // Four-per-em space
-      '\u2006': ' ',  // Six-per-em space
-      '\u2007': ' ',  // Figure space
-      '\u2008': ' ',  // Punctuation space
-      '\u2009': ' ',  // Thin space
-      '\u200A': ' ',  // Hair space
-      '\u202F': ' ',  // Narrow no-break space
-      '\u205F': ' ',  // Medium mathematical space
+      '\u00A0': ' ',   // Non-breaking space
+      '\u2000': ' ',   '\u2001': ' ',   '\u2002': ' ',   '\u2003': ' ',
+      '\u2004': ' ',   '\u2005': ' ',   '\u2006': ' ',   '\u2007': ' ',
+      '\u2008': ' ',   '\u2009': ' ',   '\u200A': ' ',   '\u202F': ' ',
+      '\u205F': ' ',
       // Ellipsis
-      '\u2026': '...',  // Horizontal ellipsis
+      '\u2026': '...',
       // Bullets and symbols
-      '\u2022': '*',  // Bullet
-      '\u2023': '>',  // Triangular bullet
-      '\u2043': '-',  // Hyphen bullet
-      '\u25E6': '*',  // White bullet
-      '\u00B7': '*',  // Middle dot
-      '\u2219': '*',  // Bullet operator
+      '\u2022': '*',   '\u2023': '>',   '\u2043': '-',
+      '\u25E6': '*',   '\u00B7': '*',   '\u2219': '*',
       // Currency
-      '\u20AC': 'EUR', // Euro sign (keep € for GSM-7)
-      '\u00A2': 'c',   // Cent sign
-      '\u00A3': '£',   // Pound sign (GSM-7 compatible)
-      '\u00A5': '¥',   // Yen sign (GSM-7 compatible)
+      '\u20AC': 'EUR', '\u00A2': 'c',
+      '\u00A3': '£',   '\u00A5': '¥',
       // Copyright and trademark
-      '\u00A9': '(c)',   // Copyright
-      '\u00AE': '(R)',   // Registered trademark
-      '\u2122': '(TM)',  // Trademark
+      '\u00A9': '(c)', '\u00AE': '(R)', '\u2122': '(TM)',
       // Arrows
-      '\u2190': '<-',  // Leftwards arrow
-      '\u2192': '->',  // Rightwards arrow
-      '\u2191': '^',   // Upwards arrow
-      '\u2193': 'v',   // Downwards arrow
+      '\u2190': '<-',  '\u2192': '->',  '\u2191': '^',   '\u2193': 'v',
     };
 
-    // Apply replacements
     Object.entries(replacements).forEach(([unicode, ascii]) => {
       cleaned = cleaned.replace(new RegExp(unicode, 'g'), ascii);
     });
 
-    // Step 3: Remove zero-width and invisible characters
+    // Step 2: Remove zero-width and invisible characters
     cleaned = cleaned.replace(/[\u200B-\u200D\uFEFF]/g, '');
 
-    // Step 4: Remove emojis and other Unicode symbols (beyond Basic Latin + GSM-7 extensions)
-    // Keep only GSM-7 compatible characters (including digits 0-9)
-    const gsmCharsPattern = /[^@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&'()*+,\-.\/0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà\n\r\^{}\\[~\]|€\s]/g;
+    // Step 3: Strip characters outside the GSM-7 charset
+    // (safe for English-only messages; skipped above for non-Latin scripts)
+    const gsmCharsPattern = /[^@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&'()*+,\-.\/:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà\n\r\^{}\\[~\]|€\s]/g;
     cleaned = cleaned.replace(gsmCharsPattern, '');
 
-    // Step 5: Collapse multiple spaces
-    cleaned = cleaned.replace(/  +/g, ' ');
-
-    // Step 6: Trim whitespace
-    cleaned = cleaned.trim();
+    // Step 4: Collapse multiple spaces and trim
+    cleaned = cleaned.replace(/  +/g, ' ').trim();
 
     return cleaned;
   };
